@@ -21,5 +21,10 @@ export async function GET(req: NextRequest) {
   const state = randomUUID();
   const redirectUri = `${req.nextUrl.origin}/api/vehicle/oauth/callback`;
   const authUrl = provider.getAuthStartUrl(state, redirectUri);
+
+  if (req.nextUrl.searchParams.get('debug') === '1') {
+    return NextResponse.json({ redirectUri, authUrl });
+  }
+
   return NextResponse.redirect(authUrl);
 }
