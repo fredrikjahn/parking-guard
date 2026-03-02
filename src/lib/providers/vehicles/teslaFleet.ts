@@ -120,6 +120,19 @@ function getTokenEndpoint(): string {
   return `${config.TESLA_AUTH_BASE_URL}/oauth2/v3/token`;
 }
 
+function buildAuthorizeScope(rawScopes: string): string {
+  const scopes = rawScopes
+    .split(/\s+/)
+    .map((value) => value.trim())
+    .filter((value) => value.length > 0);
+
+  if (!scopes.includes('vehicle_location')) {
+    scopes.push('vehicle_location');
+  }
+
+  return scopes.join(' ');
+}
+
 function toTokenPayload(raw: TeslaTokenResponse): VehicleTokenPayload {
   return {
     accessToken: raw.access_token,
@@ -139,7 +152,7 @@ export const teslaFleetProvider: VehicleProvider = {
     url.searchParams.set('client_id', config.TESLA_CLIENT_ID);
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('response_type', 'code');
-    url.searchParams.set('scope', config.TESLA_SCOPES);
+    url.searchParams.set('scope', buildAuthorizeScope(config.TESLA_SCOPES));
     url.searchParams.set('state', state);
     return url.toString();
   },

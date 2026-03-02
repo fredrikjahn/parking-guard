@@ -12,7 +12,7 @@ const envSchema = z.object({
   TESLA_CLIENT_SECRET: z.string().min(1).default('todo-client-secret'),
   TESLA_AUTH_BASE_URL: z.string().url().default('https://fleet-auth.prd.vn.cloud.tesla.com'),
   TESLA_API_BASE_URL: z.string().url().default('https://fleet-api.prd.na.vn.cloud.tesla.com'),
-  TESLA_SCOPES: z.string().default('openid offline_access vehicle_device_data vehicle_cmds'),
+  TESLA_SCOPES: z.string().default('openid offline_access vehicle_device_data vehicle_location vehicle_cmds'),
 
   STOCKHOLM_BASE_URL: z.string().url().default('https://api-extern-webbtjanster.stockholm.se/ltf-tolken/v1'),
   STOCKHOLM_API_KEY: z.string().optional(),
