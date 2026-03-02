@@ -22,13 +22,99 @@ type TeslaVehiclesResponse = {
 
 type TeslaVehicleDataResponse = {
   response?: {
-    drive_state?: {
-      latitude?: number | null;
-      longitude?: number | null;
-      speed?: number | null;
-    } | null;
+    state?: string | null;
+    drive_state?: Record<string, unknown> | null;
   } | null;
 };
+
+type LatLngResult = {
+  lat: number | null;
+  lng: number | null;
+  foundPath: string | null;
+  existingPaths: string[];
+};
+
+function asFiniteNumber(value: unknown): number | null {
+  return typeof value === 'number' && Number.isFinite(value) ? value : null;
+}
+
+function extractLatLng(driveState: unknown): LatLngResult {
+  if (!driveState || typeof driveState !== 'object') {
+    return { lat: null, lng: null, foundPath: null, existingPaths: [] };
+  }
+
+  const state = driveState as Record<string, unknown>;
+
+  const candidates: Array<{ key: string; lat: unknown; lng: unknown }> = [
+    {
+      key: 'drive_state.latitude/drive_state.longitude',
+      lat: state.latitude,
+      lng: state.longitude,
+    },
+    {
+      key: 'drive_state.lat/drive_state.lon',
+      lat: state.lat,
+      lng: state.lon,
+    },
+    {
+      key: 'drive_state.location.lat/drive_state.location.long',
+      lat:
+        state.location && typeof state.location === 'object'
+          ? (state.location as Record<string, unknown>).lat
+          : null,
+      lng:
+        state.location && typeof state.location === 'object'
+          ? (state.location as Record<string, unknown>).long
+          : null,
+    },
+    {
+      key: 'drive_state.location.lat/drive_state.location.lng',
+      lat:
+        state.location && typeof state.location === 'object'
+          ? (state.location as Record<string, unknown>).lat
+          : null,
+      lng:
+        state.location && typeof state.location === 'object'
+          ? (state.location as Record<string, unknown>).lng
+          : null,
+    },
+    {
+      key: 'drive_state.position.latitude/drive_state.position.longitude',
+      lat:
+        state.position && typeof state.position === 'object'
+          ? (state.position as Record<string, unknown>).latitude
+          : null,
+      lng:
+        state.position && typeof state.position === 'object'
+          ? (state.position as Record<string, unknown>).longitude
+          : null,
+    },
+  ];
+
+  const existingPaths = candidates
+    .filter((candidate) => candidate.lat !== undefined || candidate.lng !== undefined)
+    .map((candidate) => candidate.key);
+
+  for (const candidate of candidates) {
+    const lat = asFiniteNumber(candidate.lat);
+    const lng = asFiniteNumber(candidate.lng);
+    if (lat !== null && lng !== null) {
+      return {
+        lat,
+        lng,
+        foundPath: candidate.key,
+        existingPaths,
+      };
+    }
+  }
+
+  return {
+    lat: null,
+    lng: null,
+    foundPath: null,
+    existingPaths,
+  };
+}
 
 function getTokenEndpoint(): string {
   return `${config.TESLA_AUTH_BASE_URL}/oauth2/v3/token`;
@@ -156,20 +242,44 @@ export const teslaFleetProvider: VehicleProvider = {
     }
 
     const json = (await res.json()) as TeslaVehicleDataResponse;
-    const drive = json?.response?.drive_state;
-    const lat = drive?.latitude;
-    const lng = drive?.longitude;
-    const speed = drive?.speed ?? null;
-
-    if (typeof lat !== 'number' || typeof lng !== 'number') {
-      throw new Error('No location available (missing drive_state.latitude/longitude)');
+    const driveState = json?.response?.drive_state ?? null;
+    const extracted = extractLatLng(driveState);
+    const drive =
+      driveState && typeof driveState === 'object' ? (driveState as Record<string, unknown>) : undefined;
+    const speed = drive ? asFiniteNumber(drive.speed) : null;
+    if (extracted.lat === null || extracted.lng === null) {
+      return {
+        lat: null,
+        lng: null,
+        speedKph: speed,
+        at: new Date().toISOString(),
+        status: 'ONLINE_NO_LOCATION',
+        debug: {
+          hasDriveState: Boolean(driveState),
+          driveStateKeys: drive ? Object.keys(drive) : [],
+          foundPath: extracted.foundPath,
+          note: 'location missing in drive_state payload',
+          existingPaths: extracted.existingPaths,
+          gpsAsOf: drive ? asFiniteNumber(drive.gps_as_of) : null,
+          heading: drive ? asFiniteNumber(drive.heading) : null,
+        },
+      };
     }
 
     return {
-      lat,
-      lng,
-      speedKph: typeof speed === 'number' ? speed : null,
+      lat: extracted.lat,
+      lng: extracted.lng,
+      speedKph: speed,
       at: new Date().toISOString(),
+      status: 'OK',
+      debug: {
+        hasDriveState: Boolean(driveState),
+        driveStateKeys: drive ? Object.keys(drive) : [],
+        foundPath: extracted.foundPath,
+        existingPaths: extracted.existingPaths,
+        gpsAsOf: drive ? asFiniteNumber(drive.gps_as_of) : null,
+        heading: drive ? asFiniteNumber(drive.heading) : null,
+      },
     };
   },
 };

@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { decryptJson } from '@/lib/crypto';
 import { repo, type VehicleRow } from '@/lib/db/repo';
 import { getVehicleProvider } from '@/lib/providers/vehicles';
-import type { VehicleTokenPayload } from '@/lib/providers/vehicles/types';
+import type { TelemetrySample, VehicleTokenPayload } from '@/lib/providers/vehicles/types';
 
 const DEV_USER_ID = process.env.DEV_USER_ID;
 const DEFAULT_FLEET_BASE = process.env.TESLA_API_BASE ?? process.env.TESLA_API_BASE_URL;
@@ -11,6 +11,7 @@ const FLEET_BASE_REGEX = /(https:\/\/fleet-api\.prd\.[a-z]+\.vn\.cloud\.tesla\.c
 
 const querySchema = z.object({
   vehicleId: z.string().uuid(),
+  debug: z.enum(['1', 'true']).optional(),
 });
 
 export async function GET(req: NextRequest) {
@@ -26,6 +27,7 @@ export async function GET(req: NextRequest) {
   if (!parse.success) {
     return NextResponse.json({ error: parse.error.flatten() }, { status: 400 });
   }
+  const debugEnabled = Boolean(parse.data.debug);
 
   const vehicle = await repo.getUserVehicleById(DEV_USER_ID, parse.data.vehicleId);
   if (!vehicle) {
@@ -60,11 +62,7 @@ export async function GET(req: NextRequest) {
       vehicle.external_vehicle_id,
     );
 
-    return Response.json({
-      vehicle: vehiclePayload(vehicle),
-      baseUrlUsed: initialBaseUrl,
-      telemetry,
-    });
+    return Response.json(formatTelemetryResponse(vehicle, initialBaseUrl, telemetry, debugEnabled));
   } catch (error) {
     const firstMessage = error instanceof Error ? error.message : 'Failed to fetch telemetry';
     if (isVehicleAsleepError(firstMessage)) {
@@ -95,9 +93,7 @@ export async function GET(req: NextRequest) {
         );
 
         return Response.json({
-          vehicle: vehiclePayload(vehicle),
-          baseUrlUsed: hintedBaseUrl,
-          telemetry,
+          ...formatTelemetryResponse(vehicle, hintedBaseUrl, telemetry, debugEnabled),
           retried: true,
         });
       } catch (retryError) {
@@ -123,6 +119,44 @@ export async function GET(req: NextRequest) {
       status: inferHttpStatus(firstMessage, isOutOfRegion ? 421 : 500),
     });
   }
+}
+
+function formatTelemetryResponse(
+  vehicle: VehicleRow,
+  baseUrlUsed: string,
+  telemetry: TelemetrySample,
+  debugEnabled: boolean,
+) {
+  const isOnlineNoLocation =
+    telemetry.status === 'ONLINE_NO_LOCATION' || telemetry.lat === null || telemetry.lng === null;
+  const response: Record<string, unknown> = {
+    vehicle: vehiclePayload(vehicle),
+    baseUrlUsed,
+    telemetry: isOnlineNoLocation
+      ? null
+      : {
+          lat: telemetry.lat,
+          lng: telemetry.lng,
+          speedKph: telemetry.speedKph,
+          at: telemetry.at,
+        },
+  };
+
+  if (isOnlineNoLocation) {
+    response.vehicleStatus = 'ONLINE_NO_LOCATION';
+    response.message = 'Vehicle is online but no location was returned by vehicle_data.';
+  }
+
+  if (debugEnabled && telemetry.debug) {
+    response.debug = {
+      hasDriveState: telemetry.debug.hasDriveState,
+      driveStateKeys: telemetry.debug.driveStateKeys,
+      foundPath: telemetry.debug.foundPath,
+      note: telemetry.debug.note ?? (isOnlineNoLocation ? 'location missing in drive_state payload' : undefined),
+    };
+  }
+
+  return response;
 }
 
 function vehiclePayload(vehicle: VehicleRow) {

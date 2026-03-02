@@ -14,10 +14,20 @@ export type VehicleSummary = {
 };
 
 export type TelemetrySample = {
-  lat: number;
-  lng: number;
+  lat: number | null;
+  lng: number | null;
   speedKph: number | null;
   at: string;
+  status?: 'OK' | 'ONLINE_NO_LOCATION';
+  debug?: {
+    hasDriveState: boolean;
+    driveStateKeys: string[];
+    foundPath: string | null;
+    note?: string;
+    existingPaths?: string[];
+    gpsAsOf?: number | null;
+    heading?: number | null;
+  };
 };
 
 export interface VehicleProvider {

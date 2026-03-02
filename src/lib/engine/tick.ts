@@ -141,6 +141,13 @@ export async function runTick() {
   const telemetry = await provider.getTelemetrySample(token.accessToken, fleetBase, vehicle.external_vehicle_id);
   const now = new Date();
   const nowIso = telemetry.at ?? now.toISOString();
+  if (telemetry.lat === null || telemetry.lng === null) {
+    return {
+      processed: false,
+      reason: telemetry.status === 'ONLINE_NO_LOCATION' ? 'Vehicle online but no location in telemetry' : 'No telemetry location available',
+    };
+  }
+
   const currentSample: DetectorSample = {
     lat: telemetry.lat,
     lng: telemetry.lng,
