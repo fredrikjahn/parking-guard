@@ -263,13 +263,28 @@ export const teslaFleetProvider: VehicleProvider = {
 
   async getTelemetrySample(accessToken, baseUrl, externalVehicleId, vin) {
     const normalizedBaseUrl = baseUrl.replace(/\/$/, '');
-    const vehicleRef = vin && vin.trim().length > 0 ? vin.trim() : externalVehicleId;
-    const urlCandidates = [
-      `${normalizedBaseUrl}/api/1/vehicles/${vehicleRef}/vehicle_data?endpoints=location_data,drive_state&location_data=true`,
-      `${normalizedBaseUrl}/api/1/vehicles/${vehicleRef}/vehicle_data?endpoints=location_data&location_data=true`,
-      `${normalizedBaseUrl}/api/1/vehicles/${vehicleRef}/vehicle_data?location_data=true`,
-      `${normalizedBaseUrl}/api/1/vehicles/${vehicleRef}/vehicle_data?endpoints=drive_state;location_data&location_data=true`,
+    const vehicleRefs = Array.from(
+      new Set([vin?.trim(), externalVehicleId].filter((value): value is string => Boolean(value && value.length > 0))),
+    );
+    const endpointSuffixes = [
+      'vehicle_data?endpoints=location_data,drive_state&location_data=true',
+      'vehicle_data?endpoints=location_data&location_data=true',
+      'vehicle_data?location_data=true',
+      'vehicle_data?endpoints=drive_state;location_data&location_data=true',
     ];
+    const attempts: Array<{
+      vehicleRef: string;
+      url: string;
+      ok: boolean;
+      httpStatus: number;
+      foundPath?: string | null;
+      hasDriveState?: boolean;
+      hasLocationDataBlock?: boolean;
+      responseKeys?: string[];
+      driveStateKeys?: string[];
+      locationDataKeys?: string[];
+      errorText?: string;
+    }> = [];
 
     let lastMissingLocation:
       | {
@@ -287,65 +302,102 @@ export const teslaFleetProvider: VehicleProvider = {
             existingPaths: string[];
             gpsAsOf: number | null;
             heading: number | null;
+            attempts: Array<{
+              vehicleRef: string;
+              url: string;
+              ok: boolean;
+              httpStatus: number;
+              foundPath?: string | null;
+              hasDriveState?: boolean;
+              hasLocationDataBlock?: boolean;
+              responseKeys?: string[];
+              driveStateKeys?: string[];
+              locationDataKeys?: string[];
+              errorText?: string;
+            }>;
           };
         }
       | null = null;
     let fallbackHttpError: string | null = null;
 
-    for (const url of urlCandidates) {
-      const res = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${accessToken}`,
-        },
-        cache: 'no-store',
-      });
+    for (const vehicleRef of vehicleRefs) {
+      for (const suffix of endpointSuffixes) {
+        const url = `${normalizedBaseUrl}/api/1/vehicles/${vehicleRef}/${suffix}`;
+        const res = await fetch(url, {
+          headers: {
+            Authorization: `Bearer ${accessToken}`,
+          },
+          cache: 'no-store',
+        });
 
-      if (!res.ok) {
-        const text = await res.text();
-        // Some endpoint filters can be rejected depending on backend behavior; try next candidate.
-        if (res.status === 400 || res.status === 404) {
-          fallbackHttpError = `Tesla vehicle_data failed: ${res.status} ${text}`;
-          continue;
+        if (!res.ok) {
+          const text = await res.text();
+          attempts.push({
+            vehicleRef,
+            url,
+            ok: false,
+            httpStatus: res.status,
+            errorText: text.slice(0, 240),
+          });
+          // Some endpoint filters can be rejected depending on backend behavior; try next candidate.
+          if (res.status === 400 || res.status === 404) {
+            fallbackHttpError = `Tesla vehicle_data failed: ${res.status} ${text}`;
+            continue;
+          }
+          throw new Error(`Tesla vehicle_data failed: ${res.status} ${text}`);
         }
-        throw new Error(`Tesla vehicle_data failed: ${res.status} ${text}`);
-      }
 
-      const json = (await res.json()) as TeslaVehicleDataResponse;
-      const resp = asRecord(json?.response) ?? {};
-      const extracted = extractLatLng(resp);
-      const drive = asRecord(resp.drive_state);
-      const locationData = asRecord(resp.location_data);
-      const speed = drive ? asFiniteNumber(drive.speed) : null;
-      const debug = {
-        usedVehicleRef: vehicleRef,
-        urlUsed: url,
-        responseKeys: Object.keys(resp),
-        hasLocationDataBlock: 'location_data' in resp,
-        locationDataKeys: Object.keys(locationData ?? {}),
-        hasDriveState: Boolean(drive),
-        driveStateKeys: drive ? Object.keys(drive) : [],
-        foundPath: extracted.foundPath,
-        note: 'location missing in drive_state/location_data payload',
-        existingPaths: extracted.existingPaths,
-        gpsAsOf: drive ? asFiniteNumber(drive.gps_as_of) : null,
-        heading: drive ? asFiniteNumber(drive.heading) : null,
-      };
+        const json = (await res.json()) as TeslaVehicleDataResponse;
+        const resp = asRecord(json?.response) ?? {};
+        const extracted = extractLatLng(resp);
+        const drive = asRecord(resp.drive_state);
+        const locationData = asRecord(resp.location_data);
+        const speed = drive ? asFiniteNumber(drive.speed) : null;
+        const attempt = {
+          vehicleRef,
+          url,
+          ok: true,
+          httpStatus: res.status,
+          foundPath: extracted.foundPath,
+          hasDriveState: Boolean(drive),
+          hasLocationDataBlock: 'location_data' in resp,
+          responseKeys: Object.keys(resp),
+          driveStateKeys: drive ? Object.keys(drive) : [],
+          locationDataKeys: Object.keys(locationData ?? {}),
+        };
+        attempts.push(attempt);
+        const debug = {
+          usedVehicleRef: vehicleRef,
+          urlUsed: url,
+          responseKeys: Object.keys(resp),
+          hasLocationDataBlock: 'location_data' in resp,
+          locationDataKeys: Object.keys(locationData ?? {}),
+          hasDriveState: Boolean(drive),
+          driveStateKeys: drive ? Object.keys(drive) : [],
+          foundPath: extracted.foundPath,
+          note: 'location missing in drive_state/location_data payload',
+          existingPaths: extracted.existingPaths,
+          gpsAsOf: drive ? asFiniteNumber(drive.gps_as_of) : null,
+          heading: drive ? asFiniteNumber(drive.heading) : null,
+          attempts: [...attempts],
+        };
 
-      if (extracted.lat !== null && extracted.lng !== null) {
-        return {
-          lat: extracted.lat,
-          lng: extracted.lng,
+        if (extracted.lat !== null && extracted.lng !== null) {
+          return {
+            lat: extracted.lat,
+            lng: extracted.lng,
+            speedKph: speed,
+            at: new Date().toISOString(),
+            status: 'OK',
+            debug,
+          };
+        }
+
+        lastMissingLocation = {
           speedKph: speed,
-          at: new Date().toISOString(),
-          status: 'OK',
           debug,
         };
       }
-
-      lastMissingLocation = {
-        speedKph: speed,
-        debug,
-      };
     }
 
     if (lastMissingLocation) {

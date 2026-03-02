@@ -160,6 +160,7 @@ function formatTelemetryResponse(
       driveStateKeys: telemetry.debug.driveStateKeys,
       foundPath: telemetry.debug.foundPath,
       note: telemetry.debug.note ?? (isOnlineNoLocation ? 'location missing in drive_state payload' : undefined),
+      attempts: telemetry.debug.attempts ?? [],
     };
   }
 

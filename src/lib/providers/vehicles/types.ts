@@ -32,6 +32,19 @@ export type TelemetrySample = {
     existingPaths?: string[];
     gpsAsOf?: number | null;
     heading?: number | null;
+    attempts?: Array<{
+      vehicleRef: string;
+      url: string;
+      ok: boolean;
+      httpStatus: number;
+      foundPath?: string | null;
+      hasDriveState?: boolean;
+      hasLocationDataBlock?: boolean;
+      responseKeys?: string[];
+      driveStateKeys?: string[];
+      locationDataKeys?: string[];
+      errorText?: string;
+    }>;
   };
 };
 
