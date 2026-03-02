@@ -49,6 +49,8 @@ npm run dev
 - `GET /api/vehicle/vehicles`
 - `POST /api/vehicle/sync`
 - `PATCH /api/vehicle/nickname`
+- `GET /api/vehicle/telemetry?vehicleId=<uuid>`
+- `POST /api/vehicle/wake`
 - `POST /api/vehicle/register`
 - `GET /api/rules/within?lat=59.3293&lng=18.0686&radius=50`
 - `POST /api/jobs/tick` med header `x-cron-secret: <CRON_SECRET>`
@@ -91,6 +93,24 @@ curl -X PATCH http://localhost:3000/api/vehicle/nickname \\
   -H \"content-type: application/json\" \\
   -d '{\"vehicleId\":\"<vehicles.id>\",\"nickname\":\"Min Bil\"}'
 ```
+
+## Vehicle wake and telemetry
+
+- Wake vehicle (använder user access token):
+
+```bash
+curl -X POST http://localhost:3000/api/vehicle/wake \\
+  -H \"content-type: application/json\" \\
+  -d '{\"vehicleId\":\"<vehicles.id>\"}'
+```
+
+- Läs telemetry:
+
+```bash
+curl \"http://localhost:3000/api/vehicle/telemetry?vehicleId=<vehicles.id>\"
+```
+
+- Om bilen sover returnerar telemetry endpoint `200` med `telemetry: null` och `vehicleStatus: \"ASLEEP\"`.
 
 - Om `POST /api/vehicle/register` returnerar `401` med text om partner token behöver du konfigurera Tesla partner authentication enligt deras docs.
 

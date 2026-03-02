@@ -1,19 +1,21 @@
-import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { decryptJson } from '@/lib/crypto';
 import { repo, type VehicleRow } from '@/lib/db/repo';
-import { getVehicleProvider } from '@/lib/providers/vehicles';
 import type { VehicleTokenPayload } from '@/lib/providers/vehicles/types';
 
 const DEV_USER_ID = process.env.DEV_USER_ID;
 const DEFAULT_FLEET_BASE = process.env.TESLA_API_BASE ?? process.env.TESLA_API_BASE_URL;
 const FLEET_BASE_REGEX = /(https:\/\/fleet-api\.prd\.[a-z]+\.vn\.cloud\.tesla\.com)/i;
 
-const querySchema = z.object({
+const bodySchema = z.object({
   vehicleId: z.string().uuid(),
 });
 
-export async function GET(req: NextRequest) {
+type WakeResponse = {
+  response?: unknown;
+};
+
+export async function POST(req: Request) {
   if (!DEV_USER_ID) {
     return new Response('Missing DEV_USER_ID', { status: 500 });
   }
@@ -22,9 +24,10 @@ export async function GET(req: NextRequest) {
     return new Response('Missing TESLA_API_BASE (or TESLA_API_BASE_URL)', { status: 500 });
   }
 
-  const parse = querySchema.safeParse(Object.fromEntries(req.nextUrl.searchParams.entries()));
+  const bodyJson = await req.json().catch(() => null);
+  const parse = bodySchema.safeParse(bodyJson);
   if (!parse.success) {
-    return NextResponse.json({ error: parse.error.flatten() }, { status: 400 });
+    return Response.json({ error: parse.error.flatten() }, { status: 400 });
   }
 
   const vehicle = await repo.getUserVehicleById(DEV_USER_ID, parse.data.vehicleId);
@@ -46,37 +49,17 @@ export async function GET(req: NextRequest) {
     data: conn.token_data_b64,
   });
 
-  const provider = getVehicleProvider('tesla_fleet');
-  if (!provider) {
-    return new Response('Vehicle provider not found: tesla_fleet', { status: 500 });
-  }
-
   const initialBaseUrl = conn.fleet_api_base ?? DEFAULT_FLEET_BASE;
 
   try {
-    const telemetry = await provider.getTelemetrySample(
-      token.accessToken,
-      initialBaseUrl,
-      vehicle.external_vehicle_id,
-    );
-
+    const response = await wakeVehicle(token.accessToken, initialBaseUrl, vehicle.external_vehicle_id);
     return Response.json({
       vehicle: vehiclePayload(vehicle),
       baseUrlUsed: initialBaseUrl,
-      telemetry,
+      response,
     });
   } catch (error) {
-    const firstMessage = error instanceof Error ? error.message : 'Failed to fetch telemetry';
-    if (isVehicleAsleepError(firstMessage)) {
-      return Response.json({
-        vehicle: vehiclePayload(vehicle),
-        baseUrlUsed: initialBaseUrl,
-        telemetry: null,
-        vehicleStatus: 'ASLEEP',
-        message: 'Vehicle is offline or asleep. Try again later or call /api/vehicle/wake.',
-      });
-    }
-
+    const firstMessage = error instanceof Error ? error.message : 'Wake failed';
     const hintedBaseUrl = extractFleetBaseUrl(firstMessage);
     const isOutOfRegion = firstMessage.includes('421') || firstMessage.toLowerCase().includes('out of region');
 
@@ -88,41 +71,48 @@ export async function GET(req: NextRequest) {
       }
 
       try {
-        const telemetry = await provider.getTelemetrySample(
-          token.accessToken,
-          hintedBaseUrl,
-          vehicle.external_vehicle_id,
-        );
-
+        const response = await wakeVehicle(token.accessToken, hintedBaseUrl, vehicle.external_vehicle_id);
         return Response.json({
           vehicle: vehiclePayload(vehicle),
           baseUrlUsed: hintedBaseUrl,
-          telemetry,
+          response,
           retried: true,
         });
       } catch (retryError) {
         const retryMessage = retryError instanceof Error ? retryError.message : 'Retry failed';
-        if (isVehicleAsleepError(retryMessage)) {
-          return Response.json({
-            vehicle: vehiclePayload(vehicle),
-            baseUrlUsed: hintedBaseUrl,
-            telemetry: null,
-            vehicleStatus: 'ASLEEP',
-            message: 'Vehicle is offline or asleep. Try again later or call /api/vehicle/wake.',
-            retried: true,
-          });
-        }
-
-        return new Response(`Tesla telemetry error after retry: ${retryMessage}`, {
+        return new Response(`Tesla wake error after retry: ${retryMessage}`, {
           status: inferHttpStatus(retryMessage, retryMessage.includes('421') ? 421 : 500),
         });
       }
     }
 
-    return new Response(`Tesla telemetry error: ${firstMessage}`, {
+    return new Response(`Tesla wake error: ${firstMessage}`, {
       status: inferHttpStatus(firstMessage, isOutOfRegion ? 421 : 500),
     });
   }
+}
+
+async function wakeVehicle(accessToken: string, baseUrl: string, externalVehicleId: string): Promise<unknown> {
+  const normalizedBaseUrl = baseUrl.replace(/\/$/, '');
+  const res = await fetch(`${normalizedBaseUrl}/api/1/vehicles/${externalVehicleId}/wake_up`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${accessToken}`,
+      'content-type': 'application/json',
+    },
+    body: '{}',
+    cache: 'no-store',
+  });
+
+  const text = await res.text();
+  const data = text ? safeJsonParse(text) : null;
+
+  if (!res.ok) {
+    throw new Error(`Tesla wake_up failed: ${res.status} ${text}`);
+  }
+
+  const parsed = data as WakeResponse | null;
+  return parsed?.response ?? data;
 }
 
 function vehiclePayload(vehicle: VehicleRow) {
@@ -138,11 +128,6 @@ function vehiclePayload(vehicle: VehicleRow) {
 function extractFleetBaseUrl(errorText: string): string | null {
   const match = errorText.match(FLEET_BASE_REGEX);
   return match?.[1] ?? null;
-}
-
-function isVehicleAsleepError(message: string): boolean {
-  const lower = message.toLowerCase();
-  return lower.includes('408') && (lower.includes('offline or asleep') || lower.includes('offline') || lower.includes('asleep'));
 }
 
 function inferHttpStatus(message: string, fallback: number): number {
@@ -161,4 +146,12 @@ function inferHttpStatus(message: string, fallback: number): number {
   }
 
   return code;
+}
+
+function safeJsonParse(value: string): unknown {
+  try {
+    return JSON.parse(value) as unknown;
+  } catch {
+    return null;
+  }
 }
