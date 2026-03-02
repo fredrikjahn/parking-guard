@@ -20,6 +20,16 @@ type TeslaVehiclesResponse = {
   }>;
 };
 
+type TeslaVehicleDataResponse = {
+  response?: {
+    drive_state?: {
+      latitude?: number | null;
+      longitude?: number | null;
+      speed?: number | null;
+    } | null;
+  } | null;
+};
+
 function getTokenEndpoint(): string {
   return `${config.TESLA_AUTH_BASE_URL}/oauth2/v3/token`;
 }
@@ -131,7 +141,35 @@ export const teslaFleetProvider: VehicleProvider = {
       .filter((v): v is VehicleSummary => v !== null);
   },
 
-  async getTelemetrySample(_accessToken, _externalVehicleId, _baseUrl) {
-    throw new Error('Tesla getTelemetrySample is not implemented yet');
+  async getTelemetrySample(accessToken, baseUrl, externalVehicleId) {
+    const normalizedBaseUrl = baseUrl.replace(/\/$/, '');
+    const res = await fetch(`${normalizedBaseUrl}/api/1/vehicles/${externalVehicleId}/vehicle_data`, {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+      },
+      cache: 'no-store',
+    });
+
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(`Tesla vehicle_data failed: ${res.status} ${text}`);
+    }
+
+    const json = (await res.json()) as TeslaVehicleDataResponse;
+    const drive = json?.response?.drive_state;
+    const lat = drive?.latitude;
+    const lng = drive?.longitude;
+    const speed = drive?.speed ?? null;
+
+    if (typeof lat !== 'number' || typeof lng !== 'number') {
+      throw new Error('No location available (missing drive_state.latitude/longitude)');
+    }
+
+    return {
+      lat,
+      lng,
+      speedKph: typeof speed === 'number' ? speed : null,
+      at: new Date().toISOString(),
+    };
   },
 };

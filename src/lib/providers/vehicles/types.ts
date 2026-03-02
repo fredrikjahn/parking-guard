@@ -16,7 +16,8 @@ export type VehicleSummary = {
 export type TelemetrySample = {
   lat: number;
   lng: number;
-  speedKph: number;
+  speedKph: number | null;
+  at: string;
 };
 
 export interface VehicleProvider {
@@ -25,5 +26,5 @@ export interface VehicleProvider {
   exchangeCodeForToken(code: string, redirectUri: string): Promise<VehicleTokenPayload>;
   refreshToken(refreshToken: string): Promise<VehicleTokenPayload>;
   listVehicles(accessToken: string, baseUrl: string): Promise<VehicleSummary[]>;
-  getTelemetrySample(accessToken: string, externalVehicleId: string, baseUrl: string): Promise<TelemetrySample>;
+  getTelemetrySample(accessToken: string, baseUrl: string, externalVehicleId: string): Promise<TelemetrySample>;
 }

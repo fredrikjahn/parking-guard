@@ -243,6 +243,19 @@ export const repo = {
     );
   },
 
+  async getUserVehicleById(userId: string, vehicleId: string): Promise<VehicleRow | null> {
+    return maybeData<VehicleRow>(
+      supabaseAdmin
+        .from('vehicles')
+        .select('*')
+        .eq('id', vehicleId)
+        .eq('user_id', userId)
+        .limit(1)
+        .maybeSingle() as PromiseLike<DbResult<VehicleRow>>,
+      'getUserVehicleById',
+    );
+  },
+
   async getOpenParkingEvent(vehicleId: string): Promise<ParkingEventRow | null> {
     return maybeData<ParkingEventRow>(
       supabaseAdmin

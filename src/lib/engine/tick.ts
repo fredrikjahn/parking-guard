@@ -138,11 +138,13 @@ export async function runTick() {
     });
   }
 
-  const telemetry = await provider.getTelemetrySample(token.accessToken, vehicle.external_vehicle_id, fleetBase);
+  const telemetry = await provider.getTelemetrySample(token.accessToken, fleetBase, vehicle.external_vehicle_id);
   const now = new Date();
-  const nowIso = now.toISOString();
+  const nowIso = telemetry.at ?? now.toISOString();
   const currentSample: DetectorSample = {
-    ...telemetry,
+    lat: telemetry.lat,
+    lng: telemetry.lng,
+    speedKph: telemetry.speedKph ?? 0,
     at: nowIso,
   };
 
