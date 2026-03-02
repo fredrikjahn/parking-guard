@@ -156,6 +156,7 @@ export const teslaFleetProvider: VehicleProvider = {
     url.searchParams.set('redirect_uri', redirectUri);
     url.searchParams.set('response_type', 'code');
     url.searchParams.set('scope', buildAuthorizeScope(config.TESLA_SCOPES));
+    url.searchParams.set('prompt', 'consent');
     url.searchParams.set('state', state);
     return url.toString();
   },
