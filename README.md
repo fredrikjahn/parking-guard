@@ -70,7 +70,9 @@ curl http://localhost:3000/api/vehicle/vehicles
 
 ## Tesla key setup
 
-1. Generera RSA-nycklar (2048-bit):
+Tesla partner public key must be **EC P-256** (`prime256v1` / `secp256r1`).
+
+1. Generera nycklar:
 
 ```bash
 ./scripts/gen-tesla-keys.sh
@@ -78,6 +80,8 @@ curl http://localhost:3000/api/vehicle/vehicles
 
 2. Public key skrivs till:
    - `public/.well-known/appspecific/com.tesla.3p.public-key.pem`
+   - Får endast innehålla `BEGIN/END PUBLIC KEY` block (ingen cert chain).
+   - Scriptet failar om public key > 2 KB.
 
 3. Private key skrivs lokalt till:
    - `tesla-private-key.pem` (är git-ignorerad)
@@ -87,7 +91,14 @@ curl http://localhost:3000/api/vehicle/vehicles
 
 5. Efter att public key uppdaterats i `public/` måste appen redeployas.
 
-6. Debug-check:
+6. Verifiera deployment:
+
+```bash
+curl -I https://parking-guard-mnnb.vercel.app/.well-known/appspecific/com.tesla.3p.public-key.pem
+curl -s https://parking-guard-mnnb.vercel.app/.well-known/appspecific/com.tesla.3p.public-key.pem | wc -c
+```
+
+7. Debug-check:
    - `GET /api/tesla/public-key`
 
 ## Hur engine tick fungerar
