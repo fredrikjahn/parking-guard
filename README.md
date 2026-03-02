@@ -60,6 +60,12 @@ npm run dev
 curl -X POST http://localhost:3000/api/vehicle/register
 ```
 
+- För explicit region-registrering:
+
+```bash
+curl -X POST "http://localhost:3000/api/vehicle/register?base=https://fleet-api.prd.eu.vn.cloud.tesla.com"
+```
+
 - Försök sedan igen:
 
 ```bash

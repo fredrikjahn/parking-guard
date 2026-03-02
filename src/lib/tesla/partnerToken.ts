@@ -15,16 +15,21 @@ type CachedPartnerToken = {
 
 const TESLA_PARTNER_TOKEN_URL = 'https://fleet-auth.prd.vn.cloud.tesla.com/oauth2/v3/token';
 const CACHE_TTL_MS = 50 * 60 * 1000;
-
-let cachedToken: CachedPartnerToken | null = null;
+const tokenCache = new Map<string, CachedPartnerToken>();
 let lastCacheHit = false;
 
 export function wasLastPartnerTokenCacheHit(): boolean {
   return lastCacheHit;
 }
 
-export async function getPartnerToken(): Promise<PartnerToken> {
+export async function getPartnerToken(audienceBase?: string): Promise<PartnerToken> {
+  const audience = process.env.TESLA_PARTNER_AUDIENCE ?? audienceBase ?? process.env.TESLA_API_BASE;
+  if (!audience) {
+    throw new Error('Missing TESLA_PARTNER_AUDIENCE (or audienceBase/TESLA_API_BASE)');
+  }
+
   const now = Date.now();
+  const cachedToken = tokenCache.get(audience);
   if (cachedToken && cachedToken.expiresAtMs > now) {
     lastCacheHit = true;
     return cachedToken.token;
@@ -33,7 +38,6 @@ export async function getPartnerToken(): Promise<PartnerToken> {
 
   const clientId = process.env.TESLA_CLIENT_ID;
   const clientSecret = process.env.TESLA_CLIENT_SECRET;
-  const audience = process.env.TESLA_PARTNER_AUDIENCE ?? process.env.TESLA_API_BASE;
 
   if (!clientId) {
     throw new Error('Missing TESLA_CLIENT_ID');
@@ -41,10 +45,6 @@ export async function getPartnerToken(): Promise<PartnerToken> {
   if (!clientSecret) {
     throw new Error('Missing TESLA_CLIENT_SECRET');
   }
-  if (!audience) {
-    throw new Error('Missing TESLA_PARTNER_AUDIENCE (or TESLA_API_BASE)');
-  }
-
   const body = new URLSearchParams({
     grant_type: 'client_credentials',
     client_id: clientId,
@@ -78,10 +78,10 @@ export async function getPartnerToken(): Promise<PartnerToken> {
     expires_in: expiresIn,
   };
 
-  cachedToken = {
+  tokenCache.set(audience, {
     token,
     expiresAtMs: now + CACHE_TTL_MS,
-  };
+  });
 
   return token;
 }
