@@ -138,7 +138,12 @@ export async function runTick() {
     });
   }
 
-  const telemetry = await provider.getTelemetrySample(token.accessToken, fleetBase, vehicle.external_vehicle_id);
+  const telemetry = await provider.getTelemetrySample(
+    token.accessToken,
+    fleetBase,
+    vehicle.external_vehicle_id,
+    vehicle.vin ?? undefined,
+  );
   const now = new Date();
   const nowIso = telemetry.at ?? now.toISOString();
   if (telemetry.lat === null || telemetry.lng === null) {

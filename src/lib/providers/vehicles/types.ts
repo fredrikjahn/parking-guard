@@ -20,6 +20,8 @@ export type TelemetrySample = {
   at: string;
   status?: 'OK' | 'ONLINE_NO_LOCATION';
   debug?: {
+    usedVehicleRef?: string;
+    urlUsed?: string;
     hasDriveState: boolean;
     driveStateKeys: string[];
     foundPath: string | null;
@@ -36,5 +38,10 @@ export interface VehicleProvider {
   exchangeCodeForToken(code: string, redirectUri: string): Promise<VehicleTokenPayload>;
   refreshToken(refreshToken: string): Promise<VehicleTokenPayload>;
   listVehicles(accessToken: string, baseUrl: string): Promise<VehicleSummary[]>;
-  getTelemetrySample(accessToken: string, baseUrl: string, externalVehicleId: string): Promise<TelemetrySample>;
+  getTelemetrySample(
+    accessToken: string,
+    baseUrl: string,
+    externalVehicleId: string,
+    vin?: string,
+  ): Promise<TelemetrySample>;
 }

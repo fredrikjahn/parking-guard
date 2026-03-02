@@ -227,9 +227,10 @@ export const teslaFleetProvider: VehicleProvider = {
       .filter((v): v is VehicleSummary => v !== null);
   },
 
-  async getTelemetrySample(accessToken, baseUrl, externalVehicleId) {
+  async getTelemetrySample(accessToken, baseUrl, externalVehicleId, vin) {
     const normalizedBaseUrl = baseUrl.replace(/\/$/, '');
-    const url = `${normalizedBaseUrl}/api/1/vehicles/${externalVehicleId}/vehicle_data?location_data=true`;
+    const vehicleRef = vin && vin.trim().length > 0 ? vin.trim() : externalVehicleId;
+    const url = `${normalizedBaseUrl}/api/1/vehicles/${vehicleRef}/vehicle_data?endpoints=drive_state;location_data&location_data=true`;
     const res = await fetch(url, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
@@ -256,6 +257,8 @@ export const teslaFleetProvider: VehicleProvider = {
         at: new Date().toISOString(),
         status: 'ONLINE_NO_LOCATION',
         debug: {
+          usedVehicleRef: vehicleRef,
+          urlUsed: url,
           hasDriveState: Boolean(driveState),
           driveStateKeys: drive ? Object.keys(drive) : [],
           foundPath: extracted.foundPath,
@@ -274,6 +277,8 @@ export const teslaFleetProvider: VehicleProvider = {
       at: new Date().toISOString(),
       status: 'OK',
       debug: {
+        usedVehicleRef: vehicleRef,
+        urlUsed: url,
         hasDriveState: Boolean(driveState),
         driveStateKeys: drive ? Object.keys(drive) : [],
         foundPath: extracted.foundPath,

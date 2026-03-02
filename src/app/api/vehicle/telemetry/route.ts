@@ -60,6 +60,7 @@ export async function GET(req: NextRequest) {
       token.accessToken,
       initialBaseUrl,
       vehicle.external_vehicle_id,
+      vehicle.vin ?? undefined,
     );
 
     return Response.json(formatTelemetryResponse(vehicle, initialBaseUrl, telemetry, debugEnabled));
@@ -90,6 +91,7 @@ export async function GET(req: NextRequest) {
           token.accessToken,
           hintedBaseUrl,
           vehicle.external_vehicle_id,
+          vehicle.vin ?? undefined,
         );
 
         return Response.json({
@@ -132,6 +134,7 @@ function formatTelemetryResponse(
   const response: Record<string, unknown> = {
     vehicle: vehiclePayload(vehicle),
     baseUrlUsed,
+    vehicleStatus: isOnlineNoLocation ? 'ONLINE_NO_LOCATION' : 'OK',
     telemetry: isOnlineNoLocation
       ? null
       : {
@@ -143,12 +146,13 @@ function formatTelemetryResponse(
   };
 
   if (isOnlineNoLocation) {
-    response.vehicleStatus = 'ONLINE_NO_LOCATION';
     response.message = 'Vehicle is online but no location was returned by vehicle_data.';
   }
 
   if (debugEnabled && telemetry.debug) {
     response.debug = {
+      usedVehicleRef: telemetry.debug.usedVehicleRef,
+      urlUsed: telemetry.debug.urlUsed,
       hasDriveState: telemetry.debug.hasDriveState,
       driveStateKeys: telemetry.debug.driveStateKeys,
       foundPath: telemetry.debug.foundPath,
