@@ -32,6 +32,8 @@ openssl rand -base64 32
 - `supabase/migrations/001_init.sql`
 - `supabase/migrations/002_rls.sql`
 - `supabase/migrations/003_seed.sql`
+- `supabase/migrations/004_add_fleet_api_base.sql`
+- `supabase/migrations/005_add_vehicle_nickname.sql`
 
 5. Starta appen:
 
@@ -45,6 +47,8 @@ npm run dev
 - `GET /api/vehicle/oauth/start?provider=tesla_fleet`
 - `GET /api/vehicle/oauth/callback?provider=tesla_fleet&code=...&state=...`
 - `GET /api/vehicle/vehicles`
+- `POST /api/vehicle/sync`
+- `PATCH /api/vehicle/nickname`
 - `POST /api/vehicle/register`
 - `GET /api/rules/within?lat=59.3293&lng=18.0686&radius=50`
 - `POST /api/jobs/tick` med header `x-cron-secret: <CRON_SECRET>`
@@ -70,6 +74,22 @@ curl -X POST "http://localhost:3000/api/vehicle/register?base=https://fleet-api.
 
 ```bash
 curl http://localhost:3000/api/vehicle/vehicles
+```
+
+## Vehicle nicknames
+
+- `POST /api/vehicle/sync` hämtar fordon från provider och upsertar `vehicles`.
+- Vid sync sätts `nickname` bara om den saknas (`null`), så användarens nickname skrivs aldrig över.
+- Default-nickname:
+  - provider `display_name` (om icke-tom)
+  - annars `Tesla •<sista 4 i VIN>`
+  - annars `Min bil`
+- Uppdatera nickname:
+
+```bash
+curl -X PATCH http://localhost:3000/api/vehicle/nickname \\
+  -H \"content-type: application/json\" \\
+  -d '{\"vehicleId\":\"<vehicles.id>\",\"nickname\":\"Min Bil\"}'
 ```
 
 - Om `POST /api/vehicle/register` returnerar `401` med text om partner token behöver du konfigurera Tesla partner authentication enligt deras docs.

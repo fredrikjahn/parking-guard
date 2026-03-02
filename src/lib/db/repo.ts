@@ -28,6 +28,7 @@ export type VehicleRow = {
   external_vehicle_id: string;
   display_name: string;
   vin: string | null;
+  nickname: string | null;
   created_at: string;
 };
 

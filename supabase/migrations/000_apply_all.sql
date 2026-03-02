@@ -208,3 +208,7 @@ set config = excluded.config,
 -- 004_add_fleet_api_base
 alter table if exists vehicle_connections
   add column if not exists fleet_api_base text null;
+
+-- 005_add_vehicle_nickname
+alter table public.vehicles
+add column if not exists nickname text;
