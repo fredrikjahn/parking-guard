@@ -229,7 +229,8 @@ export const teslaFleetProvider: VehicleProvider = {
 
   async getTelemetrySample(accessToken, baseUrl, externalVehicleId) {
     const normalizedBaseUrl = baseUrl.replace(/\/$/, '');
-    const res = await fetch(`${normalizedBaseUrl}/api/1/vehicles/${externalVehicleId}/vehicle_data`, {
+    const url = `${normalizedBaseUrl}/api/1/vehicles/${externalVehicleId}/vehicle_data?location_data=true`;
+    const res = await fetch(url, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
