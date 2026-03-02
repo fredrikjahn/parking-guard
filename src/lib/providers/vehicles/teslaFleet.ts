@@ -126,8 +126,11 @@ function buildAuthorizeScope(rawScopes: string): string {
     .map((value) => value.trim())
     .filter((value) => value.length > 0);
 
-  if (!scopes.includes('vehicle_location')) {
-    scopes.push('vehicle_location');
+  const requiredScopes = ['openid', 'offline_access', 'vehicle_device_data', 'vehicle_location'];
+  for (const requiredScope of requiredScopes) {
+    if (!scopes.includes(requiredScope)) {
+      scopes.push(requiredScope);
+    }
   }
 
   return scopes.join(' ');
