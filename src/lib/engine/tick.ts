@@ -98,6 +98,16 @@ function shouldNotify(severity: RuleSeverity): boolean {
   return severity === 'WARN' || severity === 'CRITICAL';
 }
 
+function toGpsAsOfIso(gpsAsOf: unknown): string | null {
+  if (typeof gpsAsOf !== 'number' || !Number.isFinite(gpsAsOf)) {
+    return null;
+  }
+
+  const ms = gpsAsOf > 1_000_000_000_000 ? gpsAsOf : gpsAsOf * 1000;
+  const iso = new Date(ms).toISOString();
+  return Number.isNaN(Date.parse(iso)) ? null : iso;
+}
+
 export async function runTick() {
   const { connection, vehicle } = await repo.getActiveConnectionAndVehicleForUser(config.DEV_USER_ID);
 
@@ -146,19 +156,67 @@ export async function runTick() {
   );
   const now = new Date();
   const nowIso = telemetry.at ?? now.toISOString();
-  if (telemetry.lat === null || telemetry.lng === null) {
-    return {
-      processed: false,
-      reason: telemetry.status === 'ONLINE_NO_LOCATION' ? 'Vehicle online but no location in telemetry' : 'No telemetry location available',
-    };
+
+  if (telemetry.lat !== null && telemetry.lng !== null) {
+    try {
+      await repo.upsertVehicleLastLocation({
+        user_id: config.DEV_USER_ID,
+        vehicle_id: vehicle.id,
+        lat: telemetry.lat,
+        lng: telemetry.lng,
+        gps_as_of: toGpsAsOfIso(telemetry.debug?.gpsAsOf),
+        source: 'telemetry',
+      });
+    } catch {
+      // Best effort persistence; tick processing should still continue.
+    }
   }
 
-  const currentSample: DetectorSample = {
-    lat: telemetry.lat,
-    lng: telemetry.lng,
-    speedKph: telemetry.speedKph ?? 0,
-    at: nowIso,
-  };
+  let currentSample: DetectorSample;
+  let usedLastKnownLocation = false;
+
+  if (telemetry.lat === null || telemetry.lng === null) {
+    let lastKnown = null;
+    try {
+      lastKnown = await repo.getVehicleLastLocation(config.DEV_USER_ID, vehicle.id);
+    } catch {
+      lastKnown = null;
+    }
+
+    if (!lastKnown) {
+      return {
+        processed: false,
+        reason:
+          telemetry.status === 'ONLINE_NO_LOCATION'
+            ? 'Vehicle online but no location in telemetry'
+            : 'No telemetry location available',
+      };
+    }
+
+    const lat = Number(lastKnown.lat);
+    const lng = Number(lastKnown.lng);
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      return {
+        processed: false,
+        reason: 'Last known location is invalid',
+      };
+    }
+
+    currentSample = {
+      lat,
+      lng,
+      speedKph: telemetry.speedKph ?? 0,
+      at: nowIso,
+    };
+    usedLastKnownLocation = true;
+  } else {
+    currentSample = {
+      lat: telemetry.lat,
+      lng: telemetry.lng,
+      speedKph: telemetry.speedKph ?? 0,
+      at: nowIso,
+    };
+  }
 
   let event = await repo.getOpenParkingEvent(vehicle.id);
   if (!event) {
@@ -179,6 +237,7 @@ export async function runTick() {
       status: created.status,
       rulesChecked: false,
       notifications: [],
+      usedLastKnownLocation,
     };
   }
 
@@ -229,6 +288,7 @@ export async function runTick() {
       status: nextStatus,
       rulesChecked: false,
       notifications: [],
+      usedLastKnownLocation,
     };
   }
 
@@ -299,5 +359,6 @@ export async function runTick() {
     severity,
     hitCount,
     notifications,
+    usedLastKnownLocation,
   };
 }

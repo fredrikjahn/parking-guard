@@ -267,9 +267,10 @@ export const teslaFleetProvider: VehicleProvider = {
       new Set([vin?.trim(), externalVehicleId].filter((value): value is string => Boolean(value && value.length > 0))),
     );
     const endpointSuffixes = [
-      'vehicle_data?endpoints=location_data,drive_state&location_data=true',
       'vehicle_data?endpoints=location_data&location_data=true',
+      'vehicle_data?endpoints=drive_state&location_data=true',
       'vehicle_data?location_data=true',
+      'vehicle_data?endpoints=location_data,drive_state&location_data=true',
       'vehicle_data?endpoints=drive_state;location_data&location_data=true',
     ];
     const attempts: Array<{

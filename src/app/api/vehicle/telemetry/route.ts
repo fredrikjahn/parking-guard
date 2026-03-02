@@ -62,6 +62,7 @@ export async function GET(req: NextRequest) {
       vehicle.external_vehicle_id,
       vehicle.vin ?? undefined,
     );
+    await upsertLastKnownLocationBestEffort(vehicle, telemetry);
 
     return Response.json(formatTelemetryResponse(vehicle, initialBaseUrl, telemetry, debugEnabled));
   } catch (error) {
@@ -93,6 +94,7 @@ export async function GET(req: NextRequest) {
           vehicle.external_vehicle_id,
           vehicle.vin ?? undefined,
         );
+        await upsertLastKnownLocationBestEffort(vehicle, telemetry);
 
         return Response.json({
           ...formatTelemetryResponse(vehicle, hintedBaseUrl, telemetry, debugEnabled),
@@ -203,4 +205,33 @@ function inferHttpStatus(message: string, fallback: number): number {
   }
 
   return code;
+}
+
+function toGpsAsOfIso(gpsAsOf: unknown): string | null {
+  if (typeof gpsAsOf !== 'number' || !Number.isFinite(gpsAsOf)) {
+    return null;
+  }
+
+  const ms = gpsAsOf > 1_000_000_000_000 ? gpsAsOf : gpsAsOf * 1000;
+  const iso = new Date(ms).toISOString();
+  return Number.isNaN(Date.parse(iso)) ? null : iso;
+}
+
+async function upsertLastKnownLocationBestEffort(vehicle: VehicleRow, telemetry: TelemetrySample): Promise<void> {
+  if (telemetry.lat === null || telemetry.lng === null) {
+    return;
+  }
+
+  try {
+    await repo.upsertVehicleLastLocation({
+      user_id: vehicle.user_id,
+      vehicle_id: vehicle.id,
+      lat: telemetry.lat,
+      lng: telemetry.lng,
+      gps_as_of: toGpsAsOfIso(telemetry.debug?.gpsAsOf),
+      source: 'telemetry',
+    });
+  } catch {
+    // Best effort only; telemetry endpoint response should still succeed.
+  }
 }

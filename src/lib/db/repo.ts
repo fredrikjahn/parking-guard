@@ -65,6 +65,18 @@ export type NotificationLogRow = {
   created_at: string;
 };
 
+export type VehicleLastLocationRow = {
+  id: string;
+  user_id: string;
+  vehicle_id: string;
+  lat: number;
+  lng: number;
+  gps_as_of: string | null;
+  source: string;
+  created_at: string;
+  updated_at: string;
+};
+
 export type RulesSourceWithJurisdictionRow = {
   id: string;
   provider_key: string;
@@ -128,6 +140,16 @@ type NotificationLogInsert = {
   kind: NotificationKind;
   sent_at: string;
   user_action: string | null;
+};
+
+type VehicleLastLocationUpsert = {
+  user_id: string;
+  vehicle_id: string;
+  lat: number;
+  lng: number;
+  gps_as_of: string | null;
+  source: string;
+  updated_at?: string;
 };
 
 async function requireData<T>(query: PromiseLike<DbResult<T>>, context: string): Promise<T> {
@@ -325,6 +347,35 @@ export const repo = {
         DbResult<NotificationLogRow>
       >,
       'logNotification',
+    );
+  },
+
+  async upsertVehicleLastLocation(input: VehicleLastLocationUpsert): Promise<VehicleLastLocationRow> {
+    const payload = {
+      ...input,
+      updated_at: input.updated_at ?? new Date().toISOString(),
+    };
+
+    return requireData<VehicleLastLocationRow>(
+      supabaseAdmin
+        .from('vehicle_last_locations')
+        .upsert(payload, { onConflict: 'vehicle_id' })
+        .select('*')
+        .single() as PromiseLike<DbResult<VehicleLastLocationRow>>,
+      'upsertVehicleLastLocation',
+    );
+  },
+
+  async getVehicleLastLocation(userId: string, vehicleId: string): Promise<VehicleLastLocationRow | null> {
+    return maybeData<VehicleLastLocationRow>(
+      supabaseAdmin
+        .from('vehicle_last_locations')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('vehicle_id', vehicleId)
+        .limit(1)
+        .maybeSingle() as PromiseLike<DbResult<VehicleLastLocationRow>>,
+      'getVehicleLastLocation',
     );
   },
 
