@@ -52,6 +52,8 @@ npm run dev
 ## Tesla Fleet region and registration
 
 - `TESLA_API_BASE` styr vilken Fleet API-region som används (NA/EU).
+- Tesla partner registration kräver publik nyckelfil på:
+  - `/.well-known/appspecific/com.tesla.3p.public-key.pem`
 - Om `GET /api/vehicle/vehicles` returnerar `412` med `must be registered`, kör:
 
 ```bash
@@ -65,6 +67,28 @@ curl http://localhost:3000/api/vehicle/vehicles
 ```
 
 - Om `POST /api/vehicle/register` returnerar `401` med text om partner token behöver du konfigurera Tesla partner authentication enligt deras docs.
+
+## Tesla key setup
+
+1. Generera RSA-nycklar (2048-bit):
+
+```bash
+./scripts/gen-tesla-keys.sh
+```
+
+2. Public key skrivs till:
+   - `public/.well-known/appspecific/com.tesla.3p.public-key.pem`
+
+3. Private key skrivs lokalt till:
+   - `tesla-private-key.pem` (är git-ignorerad)
+
+4. Lägg private key i Vercel env senare som:
+   - `TESLA_PARTNER_PRIVATE_KEY_PEM`
+
+5. Efter att public key uppdaterats i `public/` måste appen redeployas.
+
+6. Debug-check:
+   - `GET /api/tesla/public-key`
 
 ## Hur engine tick fungerar
 
