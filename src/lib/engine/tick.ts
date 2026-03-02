@@ -113,6 +113,12 @@ export async function runTick() {
     throw new Error(`Unknown vehicle provider: ${connection.provider_key}`);
   }
 
+  const defaultFleetBase = process.env.TESLA_API_BASE ?? process.env.TESLA_API_BASE_URL;
+  const fleetBase = connection.fleet_api_base ?? defaultFleetBase;
+  if (!fleetBase) {
+    throw new Error('Missing TESLA_API_BASE (or TESLA_API_BASE_URL)');
+  }
+
   let token = decryptJson<VehicleTokenPayload>({
     iv: connection.token_iv_b64,
     data: connection.token_data_b64,
@@ -132,7 +138,7 @@ export async function runTick() {
     });
   }
 
-  const telemetry = await provider.getTelemetrySample(token.accessToken, vehicle.external_vehicle_id);
+  const telemetry = await provider.getTelemetrySample(token.accessToken, vehicle.external_vehicle_id, fleetBase);
   const now = new Date();
   const nowIso = now.toISOString();
   const currentSample: DetectorSample = {

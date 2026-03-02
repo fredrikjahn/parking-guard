@@ -24,6 +24,6 @@ export interface VehicleProvider {
   getAuthStartUrl(state: string, redirectUri: string): string;
   exchangeCodeForToken(code: string, redirectUri: string): Promise<VehicleTokenPayload>;
   refreshToken(refreshToken: string): Promise<VehicleTokenPayload>;
-  listVehicles(accessToken: string): Promise<VehicleSummary[]>;
-  getTelemetrySample(accessToken: string, externalVehicleId: string): Promise<TelemetrySample>;
+  listVehicles(accessToken: string, baseUrl: string): Promise<VehicleSummary[]>;
+  getTelemetrySample(accessToken: string, externalVehicleId: string, baseUrl: string): Promise<TelemetrySample>;
 }

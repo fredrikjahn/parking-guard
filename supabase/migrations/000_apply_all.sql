@@ -204,3 +204,7 @@ from picked
 on conflict (jurisdiction_id, provider_key) do update
 set config = excluded.config,
     enabled = excluded.enabled;
+
+-- 004_add_fleet_api_base
+alter table if exists vehicle_connections
+  add column if not exists fleet_api_base text null;

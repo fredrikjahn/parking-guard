@@ -1,10 +1,24 @@
+import { repo } from '@/lib/db/repo';
 import { getPartnerToken } from '@/lib/tesla/partnerToken';
 
-const TESLA_API_BASE = process.env.TESLA_API_BASE ?? process.env.TESLA_API_BASE_URL;
+const DEV_USER_ID = process.env.DEV_USER_ID;
+const DEFAULT_TESLA_API_BASE = process.env.TESLA_API_BASE ?? process.env.TESLA_API_BASE_URL;
 
 export async function POST() {
-  if (!TESLA_API_BASE) {
+  if (!DEFAULT_TESLA_API_BASE) {
     return new Response('Missing TESLA_API_BASE (or TESLA_API_BASE_URL)', { status: 500 });
+  }
+
+  let teslaApiBase = DEFAULT_TESLA_API_BASE;
+  if (DEV_USER_ID) {
+    try {
+      const conn = await repo.getTeslaConnection(DEV_USER_ID);
+      if (conn?.fleet_api_base) {
+        teslaApiBase = conn.fleet_api_base;
+      }
+    } catch {
+      // Keep default base if connection lookup fails.
+    }
   }
 
   const domain = resolveDomain();
@@ -26,7 +40,7 @@ export async function POST() {
     return Response.json({ ok: false, error: message }, { status: 500 });
   }
 
-  const registerUrl = `${TESLA_API_BASE}/api/1/partner_accounts`;
+  const registerUrl = `${teslaApiBase}/api/1/partner_accounts`;
   const payloadCandidates: Array<Record<string, unknown>> = [
     { domain },
     { domains: [domain] },

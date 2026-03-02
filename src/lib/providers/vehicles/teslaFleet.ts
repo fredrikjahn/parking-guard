@@ -99,13 +99,9 @@ export const teslaFleetProvider: VehicleProvider = {
     return toTokenPayload(raw);
   },
 
-  async listVehicles(accessToken): Promise<VehicleSummary[]> {
-    const apiBase = process.env.TESLA_API_BASE ?? config.TESLA_API_BASE_URL;
-    if (!apiBase) {
-      throw new Error('Missing TESLA_API_BASE (or TESLA_API_BASE_URL)');
-    }
-
-    const res = await fetch(`${apiBase}/api/1/vehicles`, {
+  async listVehicles(accessToken, baseUrl): Promise<VehicleSummary[]> {
+    const normalizedBaseUrl = baseUrl.replace(/\/$/, '');
+    const res = await fetch(`${normalizedBaseUrl}/api/1/vehicles`, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
@@ -135,7 +131,7 @@ export const teslaFleetProvider: VehicleProvider = {
       .filter((v): v is VehicleSummary => v !== null);
   },
 
-  async getTelemetrySample(_accessToken, _externalVehicleId) {
+  async getTelemetrySample(_accessToken, _externalVehicleId, _baseUrl) {
     throw new Error('Tesla getTelemetrySample is not implemented yet');
   },
 };

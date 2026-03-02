@@ -33,7 +33,7 @@ export async function getPartnerToken(): Promise<PartnerToken> {
 
   const clientId = process.env.TESLA_CLIENT_ID;
   const clientSecret = process.env.TESLA_CLIENT_SECRET;
-  const audience = process.env.TESLA_API_BASE;
+  const audience = process.env.TESLA_PARTNER_AUDIENCE ?? process.env.TESLA_API_BASE;
 
   if (!clientId) {
     throw new Error('Missing TESLA_CLIENT_ID');
@@ -42,7 +42,7 @@ export async function getPartnerToken(): Promise<PartnerToken> {
     throw new Error('Missing TESLA_CLIENT_SECRET');
   }
   if (!audience) {
-    throw new Error('Missing TESLA_API_BASE');
+    throw new Error('Missing TESLA_PARTNER_AUDIENCE (or TESLA_API_BASE)');
   }
 
   const body = new URLSearchParams({

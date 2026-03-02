@@ -37,7 +37,12 @@ export async function GET(req: NextRequest) {
     });
 
     try {
-      const vehicles = await provider.listVehicles(token.accessToken);
+      const fleetBase = process.env.TESLA_API_BASE ?? process.env.TESLA_API_BASE_URL;
+      if (!fleetBase) {
+        throw new Error('Missing TESLA_API_BASE (or TESLA_API_BASE_URL)');
+      }
+
+      const vehicles = await provider.listVehicles(token.accessToken, fleetBase);
       const firstVehicle = vehicles[0];
       if (firstVehicle) {
         await repo.upsertVehicle({

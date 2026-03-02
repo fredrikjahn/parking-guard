@@ -15,6 +15,7 @@ export type VehicleConnectionRow = {
   provider_key: string;
   token_iv_b64: string;
   token_data_b64: string;
+  fleet_api_base: string | null;
   expires_at: string | null;
   status: string;
   created_at: string;
@@ -212,6 +213,33 @@ export const repo = {
     );
 
     return { connection, vehicle };
+  },
+
+  async getTeslaConnection(userId: string): Promise<VehicleConnectionRow | null> {
+    return maybeData<VehicleConnectionRow>(
+      supabaseAdmin
+        .from('vehicle_connections')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('provider_key', 'tesla_fleet')
+        .eq('status', 'active')
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .maybeSingle() as PromiseLike<DbResult<VehicleConnectionRow>>,
+      'getTeslaConnection',
+    );
+  },
+
+  async setConnectionFleetBase(connectionId: string, baseUrl: string): Promise<VehicleConnectionRow> {
+    return requireData<VehicleConnectionRow>(
+      supabaseAdmin
+        .from('vehicle_connections')
+        .update({ fleet_api_base: baseUrl })
+        .eq('id', connectionId)
+        .select('*')
+        .single() as PromiseLike<DbResult<VehicleConnectionRow>>,
+      'setConnectionFleetBase',
+    );
   },
 
   async getOpenParkingEvent(vehicleId: string): Promise<ParkingEventRow | null> {
