@@ -153,6 +153,9 @@ function formatTelemetryResponse(
     response.debug = {
       usedVehicleRef: telemetry.debug.usedVehicleRef,
       urlUsed: telemetry.debug.urlUsed,
+      responseKeys: telemetry.debug.responseKeys ?? [],
+      hasLocationDataBlock: telemetry.debug.hasLocationDataBlock ?? false,
+      locationDataKeys: telemetry.debug.locationDataKeys ?? [],
       hasDriveState: telemetry.debug.hasDriveState,
       driveStateKeys: telemetry.debug.driveStateKeys,
       foundPath: telemetry.debug.foundPath,

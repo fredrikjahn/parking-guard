@@ -22,6 +22,9 @@ export type TelemetrySample = {
   debug?: {
     usedVehicleRef?: string;
     urlUsed?: string;
+    responseKeys?: string[];
+    hasLocationDataBlock?: boolean;
+    locationDataKeys?: string[];
     hasDriveState: boolean;
     driveStateKeys: string[];
     foundPath: string | null;
