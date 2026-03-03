@@ -1,0 +1,11 @@
+node_modules/
+.env.local
+.env
+.next/
+out/
+*.log
+tesla-private-key.pem
+*.key
+*.pem
+!public/.well-known/appspecific/com.tesla.3p.public-key.pem
+.vercel
