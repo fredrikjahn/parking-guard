@@ -1,7 +1,6 @@
 import { z } from 'zod';
-import { decryptJson } from '@/lib/crypto';
 import { repo, type VehicleRow } from '@/lib/db/repo';
-import type { VehicleTokenPayload } from '@/lib/providers/vehicles/types';
+import { withVehicleAccessTokenRetry } from '@/lib/vehicleAuth';
 
 const DEV_USER_ID = process.env.DEV_USER_ID;
 const DEFAULT_FLEET_BASE = process.env.TESLA_API_BASE ?? process.env.TESLA_API_BASE_URL;
@@ -44,15 +43,12 @@ export async function POST(req: Request) {
     return new Response('No active Tesla connection', { status: 401 });
   }
 
-  const token = decryptJson<VehicleTokenPayload>({
-    iv: conn.token_iv_b64,
-    data: conn.token_data_b64,
-  });
-
   const initialBaseUrl = conn.fleet_api_base ?? DEFAULT_FLEET_BASE;
 
   try {
-    const response = await wakeVehicle(token.accessToken, initialBaseUrl, vehicle.external_vehicle_id);
+    const response = await withVehicleAccessTokenRetry(conn, (accessToken) =>
+      wakeVehicle(accessToken, initialBaseUrl, vehicle.external_vehicle_id),
+    );
     return Response.json({
       vehicle: vehiclePayload(vehicle),
       baseUrlUsed: initialBaseUrl,
@@ -71,7 +67,9 @@ export async function POST(req: Request) {
       }
 
       try {
-        const response = await wakeVehicle(token.accessToken, hintedBaseUrl, vehicle.external_vehicle_id);
+        const response = await withVehicleAccessTokenRetry(conn, (accessToken) =>
+          wakeVehicle(accessToken, hintedBaseUrl, vehicle.external_vehicle_id),
+        );
         return Response.json({
           vehicle: vehiclePayload(vehicle),
           baseUrlUsed: hintedBaseUrl,

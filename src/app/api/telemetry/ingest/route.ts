@@ -1,4 +1,9 @@
 import { z } from 'zod';
+import { config } from '@/lib/config';
+import { notifyParkingEvent } from '@/lib/notify/notifier';
+import { evaluateRulesForPoint } from '@/lib/engine/ruleEvaluator';
+import { resolveRulesSourcesForPosition } from '@/lib/engine/jurisdictionResolver';
+import { repo, type NotificationKind, type RuleSeverity } from '@/lib/db/repo';
 import { supabaseAdmin } from '@/lib/db/client';
 
 const bodySchema = z
@@ -48,6 +53,25 @@ type EventRow = {
   speed_kph: number | string | null;
   shift_state: string | null;
   meta: Record<string, unknown>;
+};
+
+type DetectorSample = {
+  lat: number;
+  lng: number;
+  speedKph: number;
+  at: string;
+};
+
+type ParkedAutomationResult = {
+  triggered: boolean;
+  parkingEventId?: string;
+  severity?: RuleSeverity;
+  hitCount?: number;
+  notificationKind?: NotificationKind;
+  notificationSent?: boolean;
+  rulesErrors?: string[];
+  note?: string;
+  error?: string;
 };
 
 function normalizeTs(value: string | number): string {
@@ -110,6 +134,228 @@ function cooldownMsForType(type: EventType): number {
     return 2 * 60 * 1000;
   }
   return 0;
+}
+
+function parseSamples(raw: unknown): DetectorSample[] {
+  if (!Array.isArray(raw)) {
+    return [];
+  }
+
+  return raw
+    .map((entry) => {
+      if (!entry || typeof entry !== 'object') {
+        return null;
+      }
+      const value = entry as Record<string, unknown>;
+      const lat = toFiniteNumber(value.lat as number | string | null | undefined);
+      const lng = toFiniteNumber(value.lng as number | string | null | undefined);
+      const speedKph = toFiniteNumber(value.speedKph as number | string | null | undefined);
+      const at = typeof value.at === 'string' ? value.at : null;
+
+      if (lat === null || lng === null || speedKph === null || !at) {
+        return null;
+      }
+
+      return {
+        lat,
+        lng,
+        speedKph,
+        at,
+      };
+    })
+    .filter((entry): entry is DetectorSample => entry !== null);
+}
+
+async function maybeSendNotification(input: {
+  parkingEventId: string;
+  userId: string;
+  summary: string;
+  kind: NotificationKind;
+}): Promise<boolean> {
+  const alreadySent = await repo.hasNotificationKind(input.parkingEventId, input.kind);
+  if (alreadySent) {
+    return false;
+  }
+
+  await notifyParkingEvent({
+    userId: input.userId,
+    parkingEventId: input.parkingEventId,
+    kind: input.kind,
+    summary: input.summary,
+  });
+
+  await repo.logNotification({
+    parking_event_id: input.parkingEventId,
+    kind: input.kind,
+    sent_at: new Date().toISOString(),
+    user_action: null,
+  });
+
+  return true;
+}
+
+async function runParkedAutomation(input: {
+  vehicle: VehicleLookupRow;
+  tsIso: string;
+  lat: number;
+  lng: number;
+  speedKph: number | null;
+}): Promise<ParkedAutomationResult> {
+  const sample: DetectorSample = {
+    lat: input.lat,
+    lng: input.lng,
+    speedKph: input.speedKph ?? 0,
+    at: input.tsIso,
+  };
+
+  let parkingEvent = await repo.getOpenParkingEvent(input.vehicle.id);
+  if (!parkingEvent) {
+    parkingEvent = await repo.createParkingEvent({
+      user_id: input.vehicle.user_id,
+      vehicle_id: input.vehicle.id,
+      started_at: input.tsIso,
+      last_seen_at: input.tsIso,
+      lat: input.lat,
+      lng: input.lng,
+      status: 'PARKED',
+      raw_samples: [sample],
+    });
+  } else {
+    const history = parseSamples(parkingEvent.raw_samples);
+    const rawSamples = [...history, sample].slice(-300);
+    const startedAt = parkingEvent.status === 'PARKED' ? parkingEvent.started_at : input.tsIso;
+
+    parkingEvent = await repo.updateParkingEvent(parkingEvent.id, {
+      started_at: startedAt,
+      last_seen_at: input.tsIso,
+      lat: input.lat,
+      lng: input.lng,
+      status: 'PARKED',
+      raw_samples: rawSamples,
+    });
+  }
+
+  const resolved = await resolveRulesSourcesForPosition(input.lat, input.lng);
+  const evaluation = await evaluateRulesForPoint({
+    lat: input.lat,
+    lng: input.lng,
+    radiusM: config.DEFAULT_RADIUS_M,
+    rulesSources: resolved.rulesSources,
+  });
+
+  if (evaluation.hits.length > 0) {
+    await repo.insertRuleHits(
+      evaluation.hits.map((hit) => ({
+        parking_event_id: parkingEvent.id,
+        rules_source_id: hit.rules_source_id,
+        rule_type: hit.rule_type,
+        severity: hit.severity,
+        summary: hit.summary,
+        raw_json: hit.raw_json,
+      })),
+    );
+  }
+
+  const notificationKind: NotificationKind = evaluation.severity === 'CRITICAL' ? 'HARD' : 'SOFT';
+  const summary =
+    evaluation.hits.length > 0
+      ? `Vehicle parked. Severity ${evaluation.severity}. ${evaluation.hits.length} active rule hit(s).`
+      : 'Vehicle parked. No active rule hits.';
+  const notificationSent = await maybeSendNotification({
+    parkingEventId: parkingEvent.id,
+    userId: input.vehicle.user_id,
+    kind: notificationKind,
+    summary,
+  });
+
+  return {
+    triggered: true,
+    parkingEventId: parkingEvent.id,
+    severity: evaluation.severity,
+    hitCount: evaluation.hits.length,
+    notificationKind,
+    notificationSent,
+    rulesErrors: evaluation.errors,
+    note: resolved.jurisdiction
+      ? `Rules checked for ${resolved.jurisdiction.name}`
+      : 'No jurisdiction matched position',
+  };
+}
+
+async function runMovingAutomation(input: {
+  vehicle: VehicleLookupRow;
+  tsIso: string;
+  lat: number | null;
+  lng: number | null;
+  speedKph: number | null;
+}): Promise<ParkedAutomationResult> {
+  const openEvent = await repo.getOpenParkingEvent(input.vehicle.id);
+  if (!openEvent) {
+    return {
+      triggered: false,
+      note: 'No open parking event to close on MOVING transition.',
+    };
+  }
+
+  const lat = input.lat ?? toFiniteNumber(openEvent.lat as number | string | null | undefined);
+  const lng = input.lng ?? toFiniteNumber(openEvent.lng as number | string | null | undefined);
+  if (lat === null || lng === null) {
+    return {
+      triggered: false,
+      note: 'MOVING transition received, but lat/lng missing when closing parking event.',
+    };
+  }
+
+  const sample: DetectorSample = {
+    lat,
+    lng,
+    speedKph: input.speedKph ?? 0,
+    at: input.tsIso,
+  };
+
+  const history = parseSamples(openEvent.raw_samples);
+  const rawSamples = [...history, sample].slice(-300);
+
+  if (openEvent.status === 'PARKED') {
+    await repo.updateParkingEvent(openEvent.id, {
+      last_seen_at: input.tsIso,
+      lat,
+      lng,
+      status: 'ENDED',
+      raw_samples: rawSamples,
+    });
+
+    await repo.createParkingEvent({
+      user_id: input.vehicle.user_id,
+      vehicle_id: input.vehicle.id,
+      started_at: input.tsIso,
+      last_seen_at: input.tsIso,
+      lat,
+      lng,
+      status: 'MOVING',
+      raw_samples: [sample],
+    });
+
+    return {
+      triggered: true,
+      parkingEventId: openEvent.id,
+      note: 'Closed active PARKED event and created new MOVING event.',
+    };
+  }
+
+  await repo.updateParkingEvent(openEvent.id, {
+    last_seen_at: input.tsIso,
+    lat,
+    lng,
+    status: 'MOVING',
+    raw_samples: rawSamples,
+  });
+
+  return {
+    triggered: true,
+    parkingEventId: openEvent.id,
+    note: 'Updated existing MOVING event.',
+  };
 }
 
 async function findVehicle(ref: { vin?: string; externalVehicleId?: string }): Promise<VehicleLookupRow | null> {
@@ -306,9 +552,53 @@ export async function POST(req: Request) {
     }
   }
 
+  let automation: ParkedAutomationResult | null = null;
+  if (eventEmitted?.type === 'PARKED') {
+    const parkedLat = currLat ?? prevLat;
+    const parkedLng = currLng ?? prevLng;
+
+    if (parkedLat === null || parkedLng === null) {
+      automation = {
+        triggered: false,
+        note: 'PARKED event emitted but no lat/lng available for automation.',
+      };
+    } else {
+      try {
+        automation = await runParkedAutomation({
+          vehicle,
+          tsIso,
+          lat: parkedLat,
+          lng: parkedLng,
+          speedKph: currSpeedKph,
+        });
+      } catch (error) {
+        automation = {
+          triggered: true,
+          error: error instanceof Error ? error.message : 'Parked automation failed',
+        };
+      }
+    }
+  } else if (eventEmitted?.type === 'MOVING') {
+    try {
+      automation = await runMovingAutomation({
+        vehicle,
+        tsIso,
+        lat: currLat ?? prevLat,
+        lng: currLng ?? prevLng,
+        speedKph: currSpeedKph,
+      });
+    } catch (error) {
+      automation = {
+        triggered: true,
+        error: error instanceof Error ? error.message : 'Moving automation failed',
+      };
+    }
+  }
+
   return Response.json({
     ok: true,
     eventEmitted,
+    automation,
     distanceM: distanceM === null ? null : Math.round(distanceM * 10) / 10,
     prevMoving,
     currMoving,

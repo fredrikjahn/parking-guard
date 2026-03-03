@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { decryptJson } from '@/lib/crypto';
 import { repo, type VehicleRow } from '@/lib/db/repo';
 import { getVehicleProvider } from '@/lib/providers/vehicles';
-import type { TelemetrySample, VehicleTokenPayload } from '@/lib/providers/vehicles/types';
+import type { TelemetrySample } from '@/lib/providers/vehicles/types';
+import { withVehicleAccessTokenRetry } from '@/lib/vehicleAuth';
 
 const DEV_USER_ID = process.env.DEV_USER_ID;
 const DEFAULT_FLEET_BASE = process.env.TESLA_API_BASE ?? process.env.TESLA_API_BASE_URL;
@@ -43,11 +43,6 @@ export async function GET(req: NextRequest) {
     return new Response('No active Tesla connection', { status: 401 });
   }
 
-  const token = decryptJson<VehicleTokenPayload>({
-    iv: conn.token_iv_b64,
-    data: conn.token_data_b64,
-  });
-
   const provider = getVehicleProvider('tesla_fleet');
   if (!provider) {
     return new Response('Vehicle provider not found: tesla_fleet', { status: 500 });
@@ -56,11 +51,13 @@ export async function GET(req: NextRequest) {
   const initialBaseUrl = conn.fleet_api_base ?? DEFAULT_FLEET_BASE;
 
   try {
-    const telemetry = await provider.getTelemetrySample(
-      token.accessToken,
-      initialBaseUrl,
-      vehicle.external_vehicle_id,
-      vehicle.vin ?? undefined,
+    const telemetry = await withVehicleAccessTokenRetry(conn, (accessToken) =>
+      provider.getTelemetrySample(
+        accessToken,
+        initialBaseUrl,
+        vehicle.external_vehicle_id,
+        vehicle.vin ?? undefined,
+      ),
     );
     await upsertLastKnownLocationBestEffort(vehicle, telemetry);
 
@@ -88,11 +85,13 @@ export async function GET(req: NextRequest) {
       }
 
       try {
-        const telemetry = await provider.getTelemetrySample(
-          token.accessToken,
-          hintedBaseUrl,
-          vehicle.external_vehicle_id,
-          vehicle.vin ?? undefined,
+        const telemetry = await withVehicleAccessTokenRetry(conn, (accessToken) =>
+          provider.getTelemetrySample(
+            accessToken,
+            hintedBaseUrl,
+            vehicle.external_vehicle_id,
+            vehicle.vin ?? undefined,
+          ),
         );
         await upsertLastKnownLocationBestEffort(vehicle, telemetry);
 

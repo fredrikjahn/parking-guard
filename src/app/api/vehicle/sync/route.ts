@@ -1,8 +1,8 @@
-import { decryptJson } from '@/lib/crypto';
 import { supabaseAdmin } from '@/lib/db/client';
 import { repo } from '@/lib/db/repo';
 import { getVehicleProvider } from '@/lib/providers/vehicles';
-import type { VehicleSummary, VehicleTokenPayload } from '@/lib/providers/vehicles/types';
+import type { VehicleSummary } from '@/lib/providers/vehicles/types';
+import { withVehicleAccessTokenRetry } from '@/lib/vehicleAuth';
 
 const DEV_USER_ID = process.env.DEV_USER_ID;
 const DEFAULT_FLEET_BASE = process.env.TESLA_API_BASE ?? process.env.TESLA_API_BASE_URL;
@@ -38,11 +38,6 @@ export async function POST() {
     return new Response('No active Tesla connection', { status: 401 });
   }
 
-  const token = decryptJson<VehicleTokenPayload>({
-    iv: conn.token_iv_b64,
-    data: conn.token_data_b64,
-  });
-
   const provider = getVehicleProvider('tesla_fleet');
   if (!provider) {
     return new Response('Vehicle provider not found: tesla_fleet', { status: 500 });
@@ -52,7 +47,9 @@ export async function POST() {
   let providerVehicles: VehicleSummary[];
 
   try {
-    providerVehicles = await provider.listVehicles(token.accessToken, baseUrlUsed);
+    providerVehicles = await withVehicleAccessTokenRetry(conn, (accessToken) =>
+      provider.listVehicles(accessToken, baseUrlUsed),
+    );
   } catch (error) {
     const firstMessage = error instanceof Error ? error.message : 'Failed to fetch vehicles';
 
@@ -84,7 +81,9 @@ export async function POST() {
     }
 
     try {
-      providerVehicles = await provider.listVehicles(token.accessToken, hintedBaseUrl);
+      providerVehicles = await withVehicleAccessTokenRetry(conn, (accessToken) =>
+        provider.listVehicles(accessToken, hintedBaseUrl),
+      );
       baseUrlUsed = hintedBaseUrl;
     } catch (retryError) {
       const retryMessage = retryError instanceof Error ? retryError.message : 'Retry failed';
