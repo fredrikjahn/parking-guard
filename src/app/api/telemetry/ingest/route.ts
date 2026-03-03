@@ -27,6 +27,29 @@ type VehicleLookupRow = {
   user_id: string;
 };
 
+type TelemetryLastRow = {
+  vehicle_id: string;
+  ts: string;
+  lat: number | string | null;
+  lng: number | string | null;
+  speed_kph: number | string | null;
+  shift_state: string | null;
+  updated_at: string;
+};
+
+type EventType = 'MOVING' | 'PARKED' | 'MOVED';
+
+type EventRow = {
+  id: string;
+  type: EventType;
+  ts: string;
+  lat: number | string | null;
+  lng: number | string | null;
+  speed_kph: number | string | null;
+  shift_state: string | null;
+  meta: Record<string, unknown>;
+};
+
 function normalizeTs(value: string | number): string {
   if (typeof value === 'number') {
     const ms = value > 1_000_000_000_000 ? value : value * 1000;
@@ -38,6 +61,55 @@ function normalizeTs(value: string | number): string {
     throw new Error('Invalid ts');
   }
   return new Date(parsed).toISOString();
+}
+
+function toFiniteNumber(value: number | string | null | undefined): number | null {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function toShift(value: string | null | undefined): string | null {
+  const trimmed = value?.trim().toUpperCase();
+  return trimmed ? trimmed : null;
+}
+
+function isMoving(speedKph: number | null, shiftState: string | null): boolean {
+  if (speedKph !== null && speedKph > 1) {
+    return true;
+  }
+  if (shiftState === 'D' || shiftState === 'R' || shiftState === 'N') {
+    return true;
+  }
+  return false;
+}
+
+function haversineMeters(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const toRad = (deg: number) => (deg * Math.PI) / 180;
+  const earthRadiusM = 6_371_000;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return 2 * earthRadiusM * Math.asin(Math.sqrt(a));
+}
+
+function cooldownMsForType(type: EventType): number {
+  if (type === 'PARKED') {
+    return 5 * 60 * 1000;
+  }
+  if (type === 'MOVED') {
+    return 2 * 60 * 1000;
+  }
+  return 0;
 }
 
 async function findVehicle(ref: { vin?: string; externalVehicleId?: string }): Promise<VehicleLookupRow | null> {
@@ -115,14 +187,30 @@ export async function POST(req: Request) {
     return new Response('Vehicle not found for vehicleRef', { status: 404 });
   }
 
+  const { data: prevSnapshot, error: prevError } = (await supabaseAdmin
+    .from('vehicle_telemetry_last')
+    .select('vehicle_id,ts,lat,lng,speed_kph,shift_state,updated_at')
+    .eq('vehicle_id', vehicle.id)
+    .maybeSingle()) as {
+    data: TelemetryLastRow | null;
+    error: { message: string } | null;
+  };
+
+  if (prevError) {
+    return new Response(`DB error: ${prevError.message}`, { status: 500 });
+  }
+
+  const currShiftState = toShift(parse.data.shiftState ?? null);
+  const currSpeedKph = parse.data.speedKph ?? null;
+
   const { error } = await supabaseAdmin.from('vehicle_telemetry_last').upsert(
     {
       vehicle_id: vehicle.id,
       ts: tsIso,
       lat: parse.data.lat ?? null,
       lng: parse.data.lng ?? null,
-      speed_kph: parse.data.speedKph ?? null,
-      shift_state: parse.data.shiftState ?? null,
+      speed_kph: currSpeedKph,
+      shift_state: currShiftState,
       updated_at: new Date().toISOString(),
     },
     { onConflict: 'vehicle_id' },
@@ -132,5 +220,97 @@ export async function POST(req: Request) {
     return new Response(`DB error: ${error.message}`, { status: 500 });
   }
 
-  return Response.json({ ok: true });
+  const prevLat = toFiniteNumber(prevSnapshot?.lat ?? null);
+  const prevLng = toFiniteNumber(prevSnapshot?.lng ?? null);
+  const prevSpeed = toFiniteNumber(prevSnapshot?.speed_kph ?? null);
+  const prevShift = toShift(prevSnapshot?.shift_state ?? null);
+  const currLat = parse.data.lat ?? null;
+  const currLng = parse.data.lng ?? null;
+
+  const distanceM =
+    prevLat !== null && prevLng !== null && currLat !== null && currLng !== null
+      ? haversineMeters(prevLat, prevLng, currLat, currLng)
+      : null;
+
+  const prevMoving = isMoving(prevSpeed, prevShift);
+  const currMoving = isMoving(currSpeedKph, currShiftState);
+
+  let eventType: EventType | null = null;
+  if (prevMoving && !currMoving && currShiftState === 'P') {
+    eventType = 'PARKED';
+  } else if (distanceM !== null && distanceM > 20) {
+    eventType = 'MOVED';
+  } else if (!prevMoving && currMoving) {
+    eventType = 'MOVING';
+  }
+
+  let eventEmitted: EventRow | null = null;
+
+  if (eventType) {
+    const cooldownMs = cooldownMsForType(eventType);
+    let blockedByCooldown = false;
+
+    if (cooldownMs > 0) {
+      const { data: latestTypeEvent, error: latestTypeEventError } = (await supabaseAdmin
+        .from('vehicle_events')
+        .select('ts')
+        .eq('vehicle_id', vehicle.id)
+        .eq('type', eventType)
+        .order('ts', { ascending: false })
+        .limit(1)
+        .maybeSingle()) as {
+        data: { ts: string } | null;
+        error: { message: string } | null;
+      };
+
+      if (latestTypeEventError) {
+        return new Response(`DB error: ${latestTypeEventError.message}`, { status: 500 });
+      }
+
+      if (latestTypeEvent?.ts) {
+        const diffMs = Date.parse(tsIso) - Date.parse(latestTypeEvent.ts);
+        blockedByCooldown = Number.isFinite(diffMs) && diffMs >= 0 && diffMs < cooldownMs;
+      }
+    }
+
+    if (!blockedByCooldown) {
+      const meta = {
+        distance_m: distanceM === null ? null : Math.round(distanceM * 10) / 10,
+        prevMoving,
+        currMoving,
+      };
+
+      const { data: insertedEvent, error: insertError } = (await supabaseAdmin
+        .from('vehicle_events')
+        .insert({
+          vehicle_id: vehicle.id,
+          type: eventType,
+          ts: tsIso,
+          lat: currLat,
+          lng: currLng,
+          speed_kph: currSpeedKph,
+          shift_state: currShiftState,
+          meta,
+        })
+        .select('id,type,ts,lat,lng,speed_kph,shift_state,meta')
+        .single()) as {
+        data: EventRow | null;
+        error: { message: string } | null;
+      };
+
+      if (insertError) {
+        return new Response(`DB error: ${insertError.message}`, { status: 500 });
+      }
+
+      eventEmitted = insertedEvent;
+    }
+  }
+
+  return Response.json({
+    ok: true,
+    eventEmitted,
+    distanceM: distanceM === null ? null : Math.round(distanceM * 10) / 10,
+    prevMoving,
+    currMoving,
+  });
 }
