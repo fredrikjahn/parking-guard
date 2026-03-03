@@ -1,6 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
+import WeekSchedule from './WeekSchedule';
 
 type UiVehicle = {
   id: string;
@@ -22,7 +23,7 @@ type TelemetryPayload = {
   debug?: unknown;
 };
 
-type VehicleEvent = {
+type VehicleCardEvent = {
   id: string;
   type: string;
   ts: string;
@@ -30,36 +31,124 @@ type VehicleEvent = {
   lng: number | string | null;
   speed_kph: number | string | null;
   shift_state: string | null;
-  meta: {
-    distance_m?: number | null;
-    prevMoving?: boolean;
-    currMoving?: boolean;
-    [key: string]: unknown;
+  meta: Record<string, unknown>;
+};
+
+type WeekScheduleModel = Array<{
+  day: 'Mån' | 'Tis' | 'Ons' | 'Tor' | 'Fre' | 'Lör' | 'Sön';
+  rows: Array<{
+    from: string;
+    to: string;
+    label: string;
+  }>;
+}>;
+
+type AddressTestResponse = {
+  ok: boolean;
+  queryAddress: string;
+  resolvedAddress: string;
+  selectedRuleAddress: string | null;
+  location: {
+    lat: number;
+    lng: number;
   };
-  created_at: string;
+  activeSegment: {
+    ruleType: 'servicedagar' | 'ptillaten';
+    address: string | null;
+    citation: string | null;
+    placeType: string | null;
+    vehicle: string | null;
+    dayIndexes: number[];
+    startMin: number | null;
+    endMin: number | null;
+    windowText: string | null;
+    activeNow: boolean;
+    blocksPassengerCarNow: boolean;
+    distanceM: number | null;
+  } | null;
+  lastplats: {
+    isLastplats: boolean;
+    evidenceCount: number;
+    addresses: string[];
+    placeTypes: string[];
+    vehicles: string[];
+  };
+  ruleHits: Array<{
+    type: 'servicedagar' | 'ptillaten';
+    severity: string;
+    count: number;
+    short: string;
+    lines: string[];
+  }>;
+  weeklySchedule: WeekScheduleModel;
+  debug: {
+    servicedagarFeatures: number;
+    ptillatenFeatures: number;
+  };
 };
 
-type EventRuleHit = {
-  id: string;
-  vehicle_event_id: string;
-  provider_key: string;
-  rule_type: string;
-  severity: string;
-  summary: string;
-  raw_json: Record<string, unknown>;
-  created_at: string;
-};
-
-type EventRulesState = {
-  loading?: boolean;
-  error?: string;
-  hits?: EventRuleHit[];
-};
-
-type EventAddressState = {
-  loading?: boolean;
-  error?: string;
-  address?: string | null;
+type VehicleCardModel = {
+  vehicle: {
+    id: string;
+    nickname: string;
+    vinSuffix: string;
+  };
+  latestTelemetry: {
+    ts: string;
+    lat: number | null;
+    lng: number | null;
+    speed_kph: number | null;
+    shift_state: string | null;
+  } | null;
+  latestEvents: VehicleCardEvent[];
+  parkedCard: {
+    eventId: string;
+    ts: string;
+    checkedAt: string;
+    address: string | null;
+    lat: number | null;
+    lng: number | null;
+    statusSummary: {
+      statusNow: 'OK' | 'FORBIDDEN' | 'UNKNOWN';
+      headline: string;
+      recommendation: string;
+      nextRisk: {
+        type: 'SERVICEDAY' | 'TIME_LIMIT' | 'FEE';
+        startsAt: string;
+        endsAt: string;
+        message: string;
+      } | null;
+      nextRiskText: string | null;
+      nextActionAt?: string | null;
+      servicedayText: string | null;
+      allowedText: string | null;
+      feeText: string | null;
+      boendeText: string | null;
+    };
+    ruleHits: Array<{
+      severity: string;
+      title: string;
+      shortText: string;
+      rawJson: unknown;
+    }>;
+    allParkingRules: Array<{
+      title: string;
+      severity: string;
+      summary: string;
+    }>;
+    ruleOverview: {
+      forbidden: string[];
+      paid: string[];
+      free: string[];
+    };
+    weeklySchedule: WeekScheduleModel;
+    debugRuleHits: Array<{
+      severity: string;
+      rule_type: string;
+      summary: string;
+      raw_json: unknown;
+    }>;
+  } | null;
 };
 
 type VehicleUiState = {
@@ -73,17 +162,11 @@ type VehicleUiState = {
   nicknameSaving?: boolean;
   nicknameError?: string;
   nicknameSuccess?: string;
-  eventsLoading?: boolean;
-  eventsError?: string;
-  events?: VehicleEvent[];
+  cardLoading?: boolean;
+  cardError?: string;
+  cardData?: VehicleCardModel;
+  showParkedDetails?: boolean;
 };
-
-function vinSuffix(vin: string | null): string {
-  if (!vin) return 'okand';
-  const trimmed = vin.trim();
-  if (!trimmed) return 'okand';
-  return trimmed.slice(-4);
-}
 
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => {
@@ -105,22 +188,20 @@ function formatTs(value: string): string {
     minute: '2-digit',
     second: '2-digit',
     hour12: false,
+    timeZone: 'Europe/Stockholm',
   });
 }
 
-function eventTypeClass(type: string): string {
-  const normalized = type.toLowerCase();
-  if (normalized === 'parked') return 'event-type event-parked';
-  if (normalized === 'moved') return 'event-type event-moved';
-  if (normalized === 'moving') return 'event-type event-moving';
-  return 'event-type';
+function statusClass(status: 'OK' | 'FORBIDDEN' | 'UNKNOWN'): string {
+  if (status === 'FORBIDDEN') return 'status-badge status-forbidden';
+  if (status === 'UNKNOWN') return 'status-badge status-risk';
+  return 'status-badge status-ok';
 }
 
-function ruleSeverityClass(severity: string): string {
-  const normalized = severity.toLowerCase();
-  if (normalized === 'critical') return 'event-type event-critical';
-  if (normalized === 'warn') return 'event-type event-warn';
-  return 'event-type event-info';
+function statusLabel(status: 'OK' | 'FORBIDDEN' | 'UNKNOWN'): string {
+  if (status === 'FORBIDDEN') return 'FORBJUDEN';
+  if (status === 'UNKNOWN') return 'OKÄND';
+  return 'OK NU';
 }
 
 async function readError(res: Response): Promise<string> {
@@ -157,12 +238,13 @@ export default function DashboardPage() {
   const [syncLoading, setSyncLoading] = useState(false);
   const [syncMessage, setSyncMessage] = useState<string | null>(null);
   const [syncError, setSyncError] = useState<string | null>(null);
-  const [eventsRefreshLoading, setEventsRefreshLoading] = useState(false);
+  const [cardsRefreshLoading, setCardsRefreshLoading] = useState(false);
+  const [addressTestInput, setAddressTestInput] = useState('Rådmansgatan 12A, Stockholm');
+  const [addressTestLoading, setAddressTestLoading] = useState(false);
+  const [addressTestError, setAddressTestError] = useState<string | null>(null);
+  const [addressTestResult, setAddressTestResult] = useState<AddressTestResponse | null>(null);
   const [nicknameDrafts, setNicknameDrafts] = useState<Record<string, string>>({});
   const [vehicleState, setVehicleState] = useState<Record<string, VehicleUiState>>({});
-  const [eventRulesByEventId, setEventRulesByEventId] = useState<Record<string, EventRulesState>>({});
-  const [eventAddressByEventId, setEventAddressByEventId] = useState<Record<string, EventAddressState>>({});
-  const [expandedEventIds, setExpandedEventIds] = useState<Record<string, boolean>>({});
 
   const patchVehicleState = useCallback((vehicleId: string, patch: Partial<VehicleUiState>) => {
     setVehicleState((prev) => ({
@@ -174,169 +256,68 @@ export default function DashboardPage() {
     }));
   }, []);
 
-  const fetchVehicleEvents = useCallback(
-    async (vehicleId: string, opts?: { silent?: boolean; limit?: number }) => {
-      const silent = opts?.silent ?? false;
-      const limit = opts?.limit ?? 10;
-
+  const fetchVehicleCard = useCallback(
+    async (vehicleId: string, silent = false): Promise<void> => {
       patchVehicleState(vehicleId, {
-        eventsLoading: !silent,
-        ...(silent ? {} : { eventsError: undefined }),
+        cardLoading: !silent,
+        ...(silent ? {} : { cardError: undefined }),
       });
 
       try {
-        const res = await fetch(
-          `/api/ui/events?vehicleId=${encodeURIComponent(vehicleId)}&limit=${encodeURIComponent(String(limit))}`,
-          { cache: 'no-store' },
-        );
+        const res = await fetch(`/api/ui/vehicle-card?vehicleId=${encodeURIComponent(vehicleId)}`, {
+          cache: 'no-store',
+        });
         if (!res.ok) {
           throw new Error(await readError(res));
         }
-        const json = (await res.json()) as unknown;
-        const events = Array.isArray(json) ? (json as VehicleEvent[]) : [];
+        const json = (await res.json()) as VehicleCardModel;
         patchVehicleState(vehicleId, {
-          eventsLoading: false,
-          eventsError: undefined,
-          events,
+          cardLoading: false,
+          cardError: undefined,
+          cardData: json,
         });
       } catch (error) {
         patchVehicleState(vehicleId, {
-          eventsLoading: false,
-          eventsError: error instanceof Error ? error.message : 'Kunde inte hämta events',
+          cardLoading: false,
+          cardError: error instanceof Error ? error.message : 'Kunde inte hämta parkeringsstatus',
         });
       }
     },
     [patchVehicleState],
   );
 
-  const fetchEventRules = useCallback(async (eventId: string, force = false): Promise<void> => {
-    const existing = eventRulesByEventId[eventId];
-    if (!force && existing?.hits && existing.hits.length >= 0) {
-      return;
-    }
-
-    setEventRulesByEventId((prev) => ({
-      ...prev,
-      [eventId]: {
-        ...(prev[eventId] ?? {}),
-        loading: true,
-        error: undefined,
-      },
-    }));
-
-    try {
-      const res = await fetch(`/api/ui/event-rules?eventId=${encodeURIComponent(eventId)}`, {
-        cache: 'no-store',
-      });
-      if (!res.ok) {
-        throw new Error(await readError(res));
-      }
-
-      const json = (await res.json()) as unknown;
-      const hits = Array.isArray(json) ? (json as EventRuleHit[]) : [];
-      setEventRulesByEventId((prev) => ({
-        ...prev,
-        [eventId]: {
-          loading: false,
-          error: undefined,
-          hits,
-        },
-      }));
-    } catch (error) {
-      setEventRulesByEventId((prev) => ({
-        ...prev,
-        [eventId]: {
-          ...(prev[eventId] ?? {}),
-          loading: false,
-          error: error instanceof Error ? error.message : 'Kunde inte hämta regelträffar',
-        },
-      }));
-    }
-  }, [eventRulesByEventId]);
-
-  const fetchEventAddress = useCallback(async (event: VehicleEvent, force = false): Promise<void> => {
-    const lat = typeof event.lat === 'number' ? event.lat : typeof event.lat === 'string' ? Number.parseFloat(event.lat) : null;
-    const lng = typeof event.lng === 'number' ? event.lng : typeof event.lng === 'string' ? Number.parseFloat(event.lng) : null;
-    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
-      setEventAddressByEventId((prev) => ({
-        ...prev,
-        [event.id]: {
-          loading: false,
-          error: 'Saknar koordinater för adressuppslag.',
-          address: null,
-        },
-      }));
-      return;
-    }
-
-    if (!force && eventAddressByEventId[event.id]?.address) {
-      return;
-    }
-
-    setEventAddressByEventId((prev) => ({
-      ...prev,
-      [event.id]: {
-        ...(prev[event.id] ?? {}),
-        loading: true,
-        error: undefined,
-      },
-    }));
-
-    try {
-      const res = await fetch(
-        `/api/ui/reverse-geocode?lat=${encodeURIComponent(String(lat))}&lng=${encodeURIComponent(String(lng))}`,
-        { cache: 'no-store' },
-      );
-      if (!res.ok) {
-        throw new Error(await readError(res));
-      }
-      const json = (await res.json()) as { address?: string | null };
-      setEventAddressByEventId((prev) => ({
-        ...prev,
-        [event.id]: {
-          loading: false,
-          error: undefined,
-          address: json.address ?? null,
-        },
-      }));
-    } catch (error) {
-      setEventAddressByEventId((prev) => ({
-        ...prev,
-        [event.id]: {
-          loading: false,
-          error: error instanceof Error ? error.message : 'Kunde inte hämta adress',
-          address: null,
-        },
-      }));
-    }
-  }, [eventAddressByEventId]);
-
   const loadVehicles = useCallback(async () => {
     setVehiclesLoading(true);
     setVehiclesError(null);
+
     try {
       const res = await fetch('/api/ui/vehicles', { cache: 'no-store' });
       if (!res.ok) {
         throw new Error(await readError(res));
       }
+
       const json = (await res.json()) as unknown;
-      const nextVehicles = Array.isArray(json) ? (json as UiVehicle[]) : [];
-      setVehicles(nextVehicles);
+      const list = Array.isArray(json) ? (json as UiVehicle[]) : [];
+      const filteredVehicles = list.filter(
+        (vehicle) => vehicle.id !== 'dev-vehicle-1' && vehicle.external_vehicle_id !== 'dev-vehicle-1',
+      );
+
+      setVehicles(filteredVehicles);
       setNicknameDrafts((prev) => {
         const next: Record<string, string> = {};
-        for (const vehicle of nextVehicles) {
+        for (const vehicle of filteredVehicles) {
           next[vehicle.id] = prev[vehicle.id] ?? vehicle.nickname ?? '';
         }
         return next;
       });
 
-      await Promise.all(nextVehicles.map((vehicle) => fetchVehicleEvents(vehicle.id, { silent: true })));
+      await Promise.all(filteredVehicles.map((vehicle) => fetchVehicleCard(vehicle.id, true)));
     } catch (error) {
       setVehiclesError(error instanceof Error ? error.message : 'Kunde inte hämta bilar');
     } finally {
       setVehiclesLoading(false);
     }
-  }, [fetchVehicleEvents]);
+  }, [fetchVehicleCard]);
 
   useEffect(() => {
     void loadVehicles();
@@ -346,13 +327,16 @@ export default function DashboardPage() {
     setSyncLoading(true);
     setSyncMessage(null);
     setSyncError(null);
+
     try {
       const res = await fetch('/api/vehicle/sync', { method: 'POST' });
       if (!res.ok) {
         throw new Error(await readError(res));
       }
       const json = (await res.json().catch(() => null)) as { synced?: number } | null;
-      setSyncMessage(`Sync klar${typeof json?.synced === 'number' ? ` (${json.synced} bil${json.synced === 1 ? '' : 'ar'})` : ''}.`);
+      setSyncMessage(
+        `Sync klar${typeof json?.synced === 'number' ? ` (${json.synced} bil${json.synced === 1 ? '' : 'ar'})` : ''}.`,
+      );
       await loadVehicles();
     } catch (error) {
       setSyncError(error instanceof Error ? error.message : 'Sync misslyckades');
@@ -361,14 +345,40 @@ export default function DashboardPage() {
     }
   }, [loadVehicles]);
 
-  const refreshAllEvents = useCallback(async () => {
-    setEventsRefreshLoading(true);
+  const refreshCards = useCallback(async () => {
+    setCardsRefreshLoading(true);
     try {
-      await Promise.all(vehicles.map((vehicle) => fetchVehicleEvents(vehicle.id, { silent: false })));
+      await Promise.all(vehicles.map((vehicle) => fetchVehicleCard(vehicle.id, false)));
     } finally {
-      setEventsRefreshLoading(false);
+      setCardsRefreshLoading(false);
     }
-  }, [fetchVehicleEvents, vehicles]);
+  }, [fetchVehicleCard, vehicles]);
+
+  const runAddressTest = useCallback(async () => {
+    const address = addressTestInput.trim();
+    if (!address) {
+      setAddressTestError('Ange en adress.');
+      return;
+    }
+
+    setAddressTestLoading(true);
+    setAddressTestError(null);
+    try {
+      const res = await fetch(`/api/ui/address-test?address=${encodeURIComponent(address)}`, {
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        throw new Error(await readError(res));
+      }
+      const json = (await res.json()) as AddressTestResponse;
+      setAddressTestResult(json);
+    } catch (error) {
+      setAddressTestError(error instanceof Error ? error.message : 'Kunde inte testa adress');
+      setAddressTestResult(null);
+    } finally {
+      setAddressTestLoading(false);
+    }
+  }, [addressTestInput]);
 
   const wakeVehicle = useCallback(
     async (vehicleId: string, silentSuccess = false): Promise<boolean> => {
@@ -386,9 +396,7 @@ export default function DashboardPage() {
         if (!res.ok) {
           throw new Error(await readError(res));
         }
-        const json = (await res.json().catch(() => null)) as
-          | { response?: { state?: string } }
-          | null;
+        const json = (await res.json().catch(() => null)) as { response?: { state?: string } } | null;
         patchVehicleState(vehicleId, {
           wakeLoading: false,
           wakeMessage: silentSuccess ? undefined : `Wake skickad${json?.response?.state ? ` (${json.response.state})` : ''}.`,
@@ -412,6 +420,7 @@ export default function DashboardPage() {
         telemetryLoading: true,
         telemetryError: undefined,
       });
+
       try {
         const res = await fetch(`/api/vehicle/telemetry?vehicleId=${encodeURIComponent(vehicleId)}&debug=1`, {
           cache: 'no-store',
@@ -419,12 +428,14 @@ export default function DashboardPage() {
         if (!res.ok) {
           throw new Error(await readError(res));
         }
+
         const json = (await res.json()) as TelemetryPayload;
         patchVehicleState(vehicleId, {
           telemetryLoading: false,
           telemetryData: json,
           telemetryError: undefined,
         });
+        await fetchVehicleCard(vehicleId, true);
       } catch (error) {
         patchVehicleState(vehicleId, {
           telemetryLoading: false,
@@ -432,7 +443,7 @@ export default function DashboardPage() {
         });
       }
     },
-    [patchVehicleState],
+    [fetchVehicleCard, patchVehicleState],
   );
 
   const fetchPosition = useCallback(
@@ -442,11 +453,12 @@ export default function DashboardPage() {
         await wakeVehicle(vehicleId, true);
         await sleep(1500);
         await fetchTelemetry(vehicleId);
+        await fetchVehicleCard(vehicleId, true);
       } finally {
         patchVehicleState(vehicleId, { positionLoading: false });
       }
     },
-    [fetchTelemetry, patchVehicleState, wakeVehicle],
+    [fetchTelemetry, fetchVehicleCard, patchVehicleState, wakeVehicle],
   );
 
   const saveNickname = useCallback(
@@ -457,6 +469,7 @@ export default function DashboardPage() {
         nicknameError: undefined,
         nicknameSuccess: undefined,
       });
+
       try {
         const res = await fetch('/api/vehicle/nickname', {
           method: 'PATCH',
@@ -466,6 +479,7 @@ export default function DashboardPage() {
         if (!res.ok) {
           throw new Error(await readError(res));
         }
+
         patchVehicleState(vehicleId, {
           nicknameSaving: false,
           nicknameSuccess: 'Sparat',
@@ -494,14 +508,94 @@ export default function DashboardPage() {
           <button onClick={() => void syncVehicles()} disabled={syncLoading}>
             {syncLoading ? 'Syncar...' : 'Sync bilar'}
           </button>
-          <button onClick={() => void refreshAllEvents()} disabled={eventsRefreshLoading || vehicles.length === 0}>
-            {eventsRefreshLoading ? 'Uppdaterar...' : 'Uppdatera events'}
+          <button onClick={() => void refreshCards()} disabled={cardsRefreshLoading || vehicles.length === 0}>
+            {cardsRefreshLoading ? 'Uppdaterar...' : 'Uppdatera status'}
           </button>
         </div>
       </header>
 
       {syncError ? <p className="error-text">{syncError}</p> : null}
       {syncMessage ? <p className="success-text">{syncMessage}</p> : null}
+
+      <section className="section">
+        <h2>Adress-test</h2>
+        <p className="hint">Testa en adress och se om regler/scheman matchar förväntat.</p>
+        <div className="card">
+          <div className="row">
+            <input
+              value={addressTestInput}
+              onChange={(event) => setAddressTestInput(event.target.value)}
+              placeholder="Ex: Rådmansgatan 12A, Stockholm"
+            />
+            <button onClick={() => void runAddressTest()} disabled={addressTestLoading}>
+              {addressTestLoading ? 'Testar...' : 'Testa adress'}
+            </button>
+          </div>
+
+          {addressTestError ? <p className="error-text">{addressTestError}</p> : null}
+
+          {addressTestResult ? (
+            <div className="result-panel">
+              <p className="meta">
+                <strong>Matchad adress:</strong> {addressTestResult.selectedRuleAddress ?? addressTestResult.resolvedAddress}
+              </p>
+              <p className="meta">
+                <strong>Koordinater:</strong> {addressTestResult.location.lat.toFixed(6)}, {addressTestResult.location.lng.toFixed(6)}
+              </p>
+              <p className="meta">
+                <strong>Lastplats:</strong> {addressTestResult.lastplats.isLastplats ? 'Ja' : 'Nej'}
+                {addressTestResult.lastplats.isLastplats ? (
+                  <>
+                    {' '}
+                    {addressTestResult.lastplats.addresses.length > 0
+                      ? `(${addressTestResult.lastplats.addresses.join(', ')})`
+                      : ''}
+                    {addressTestResult.lastplats.placeTypes.length > 0
+                      ? ` Typ: ${addressTestResult.lastplats.placeTypes.join(', ')}`
+                      : ''}
+                  </>
+                ) : null}
+              </p>
+              {addressTestResult.activeSegment ? (
+                <p className="meta">
+                  <strong>Aktivt segment:</strong>{' '}
+                  {addressTestResult.activeSegment.address ?? 'okänt segment'}
+                  {addressTestResult.activeSegment.placeType ? ` • ${addressTestResult.activeSegment.placeType}` : ''}
+                  {addressTestResult.activeSegment.windowText ? ` • tid: ${addressTestResult.activeSegment.windowText}` : ''}
+                  {addressTestResult.activeSegment.distanceM !== null
+                    ? ` • ${addressTestResult.activeSegment.distanceM.toFixed(1)} m`
+                    : ''}
+                  {addressTestResult.activeSegment.blocksPassengerCarNow ? ' • blockerar personbil nu' : ''}
+                </p>
+              ) : null}
+
+              <div className="rules-summary-box">
+                <p className="meta">
+                  <strong>Regelträffar</strong>
+                </p>
+                {addressTestResult.ruleHits.map((hit, index) => (
+                  <p className="meta" key={`address-test-hit-${index}`}>
+                    <strong>{hit.type === 'servicedagar' ? 'Gatusopning' : 'Tillåten parkering'}:</strong> {hit.short}{' '}
+                    <span className="hint">({hit.count} träffar)</span>
+                  </p>
+                ))}
+              </div>
+
+              <div className="rules-summary-box">
+                <p className="meta">
+                  <strong>Veckoschema (test)</strong>
+                </p>
+                <WeekSchedule schedule={addressTestResult.weeklySchedule} />
+              </div>
+
+              <details>
+                <summary>Debug</summary>
+                <pre>{JSON.stringify(addressTestResult, null, 2)}</pre>
+              </details>
+            </div>
+          ) : null}
+        </div>
+      </section>
 
       <section className="section">
         <h2>Bilar</h2>
@@ -515,19 +609,19 @@ export default function DashboardPage() {
         <div className="cards">
           {vehicles.map((vehicle) => {
             const state = vehicleState[vehicle.id] ?? {};
-            const telemetry = state.telemetryData;
-            const coords = telemetry?.telemetry ?? null;
-            const hasCoords = typeof coords?.lat === 'number' && typeof coords?.lng === 'number';
-            const mapsHref = hasCoords ? `https://maps.google.com/?q=${coords.lat},${coords.lng}` : null;
+            const cardData = state.cardData;
+            const parkedCard = cardData?.parkedCard ?? null;
+            const mapsHref =
+              parkedCard && parkedCard.lat !== null && parkedCard.lng !== null
+                ? `https://maps.google.com/?q=${parkedCard.lat},${parkedCard.lng}`
+                : null;
 
             return (
               <article className="card" key={vehicle.id}>
                 <header className="card-header">
                   <h2>{vehicle.nickname || 'Min bil'}</h2>
-                  <p className="meta mono">VIN ••••{vinSuffix(vehicle.vin)}</p>
+                  <p className="meta mono">VIN ••••{cardData?.vehicle.vinSuffix ?? 'okand'}</p>
                 </header>
-
-                <p className="meta mono">ID: {vehicle.external_vehicle_id}</p>
 
                 <div className="row">
                   <input
@@ -550,144 +644,136 @@ export default function DashboardPage() {
                 {state.nicknameError ? <p className="error-text">{state.nicknameError}</p> : null}
                 {state.nicknameSuccess ? <p className="success-text">{state.nicknameSuccess}</p> : null}
 
-                <div className="button-row">
-                  <button onClick={() => void wakeVehicle(vehicle.id)} disabled={state.wakeLoading || state.positionLoading}>
-                    {state.wakeLoading ? 'Väcker...' : 'Wake'}
-                  </button>
-                  <button
-                    onClick={() => void fetchPosition(vehicle.id)}
-                    disabled={state.positionLoading || state.telemetryLoading}
-                  >
-                    {state.positionLoading || state.telemetryLoading ? 'Hämtar...' : 'Hämta position'}
-                  </button>
-                  <button onClick={() => void fetchTelemetry(vehicle.id)} disabled={state.telemetryLoading}>
-                    {state.telemetryLoading ? 'Laddar...' : 'Hämta telemetry'}
-                  </button>
-                </div>
-
-                {state.wakeError ? <p className="error-text">{formatUserError(state.wakeError)}</p> : null}
-                {state.wakeMessage ? <p className="hint">{state.wakeMessage}</p> : null}
-
                 <section className="result-panel">
-                  <h3>Resultat</h3>
-                  {state.telemetryLoading ? <p className="hint">Hämtar telemetry...</p> : null}
-                  {state.telemetryError ? <p className="error-text">{formatUserError(state.telemetryError)}</p> : null}
-                  {telemetry ? (
-                    <div className="result-content">
-                      <p>
-                        Status: <strong>{telemetry.vehicleStatus ?? 'okänd'}</strong>
-                      </p>
-                      {hasCoords ? (
-                        <>
-                          <p className="mono">
-                            lat: {telemetry.telemetry?.lat}, lng: {telemetry.telemetry?.lng}
-                          </p>
-                          <p className="mono">speedKph: {telemetry.telemetry?.speedKph ?? 'null'}</p>
-                          <a href={mapsHref ?? '#'} target="_blank" rel="noreferrer">
-                            Öppna i Google Maps
-                          </a>
-                        </>
-                      ) : (
-                        <p className="hint">{telemetry.message ?? 'Ingen position tillgänglig ännu.'}</p>
-                      )}
+                  <h3>Parkeringsstatus</h3>
 
-                      {telemetry.debug ? (
-                        <details>
-                          <summary>Debug</summary>
-                          <pre>{JSON.stringify(telemetry.debug, null, 2)}</pre>
-                        </details>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <p className="hint">Ingen telemetry hämtad ännu.</p>
-                  )}
-                </section>
+                  {state.cardLoading ? <p className="hint">Hämtar status...</p> : null}
+                  {state.cardError ? <p className="error-text">{state.cardError}</p> : null}
 
-                <section className="result-panel">
-                  <div className="section-head">
-                    <h3>Senaste events</h3>
-                    <button onClick={() => void fetchVehicleEvents(vehicle.id)} disabled={state.eventsLoading}>
-                      {state.eventsLoading ? 'Laddar...' : 'Uppdatera'}
-                    </button>
-                  </div>
-
-                  {state.eventsError ? <p className="error-text">{state.eventsError}</p> : null}
-
-                  {!state.eventsError && (state.events?.length ?? 0) === 0 ? (
-                    <p className="hint">Inga events ännu.</p>
-                  ) : null}
-
-                  {(state.events ?? []).slice(0, 6).map((event) => (
-                    <div className="event-item" key={event.id}>
-                      <div className="event-row">
-                        <span className={eventTypeClass(event.type)}>{event.type}</span>
-                        <span className="event-ts mono">{formatTs(event.ts)}</span>
-                        <span className="event-meta mono">
-                          {event.lat ?? '-'}, {event.lng ?? '-'}
+                  {!state.cardLoading && !state.cardError && parkedCard ? (
+                    <div className="parking-status-block">
+                      <div className="parking-status-head">
+                        <span className={statusClass(parkedCard.statusSummary.statusNow)}>
+                          {statusLabel(parkedCard.statusSummary.statusNow)}
                         </span>
-                        <span className="event-meta mono">v={event.speed_kph ?? '-'}</span>
-                        <span className="event-meta mono">s={event.shift_state ?? '-'}</span>
-                        {typeof event.meta?.distance_m === 'number' ? (
-                          <span className="event-meta mono">d={event.meta.distance_m}m</span>
-                        ) : null}
-                        <button
-                          className="event-toggle"
-                          onClick={() => {
-                            const willExpand = !expandedEventIds[event.id];
-                            setExpandedEventIds((prev) => ({ ...prev, [event.id]: willExpand }));
-                            if (willExpand) {
-                              void fetchEventRules(event.id);
-                            }
-                          }}
-                        >
-                          {expandedEventIds[event.id] ? 'Dölj regler' : 'Visa regler'}
-                        </button>
-                        <button className="event-toggle" onClick={() => void fetchEventAddress(event)}>
-                          Visa adress
-                        </button>
+                        <span className="event-ts mono">Kontrollerad: {formatTs(parkedCard.checkedAt)}</span>
                       </div>
 
-                      {eventAddressByEventId[event.id]?.loading ? (
-                        <p className="hint">Hämtar adress...</p>
-                      ) : null}
-                      {eventAddressByEventId[event.id]?.error ? (
-                        <p className="error-text">{eventAddressByEventId[event.id]?.error}</p>
-                      ) : null}
-                      {eventAddressByEventId[event.id]?.address ? (
-                        <p className="hint">
-                          <strong>Adress:</strong> {eventAddressByEventId[event.id]?.address}
+                      <p className="status-headline">{parkedCard.statusSummary.headline}</p>
+                      <p className="status-recommendation">{parkedCard.statusSummary.recommendation}</p>
+                      {parkedCard.statusSummary.nextRiskText ? (
+                        <p className="meta">
+                          <strong>Nästa risk:</strong> {parkedCard.statusSummary.nextRiskText}
                         </p>
                       ) : null}
 
-                      {expandedEventIds[event.id] ? (
-                        <div className="event-rules">
-                          {eventRulesByEventId[event.id]?.loading ? <p className="hint">Hämtar regelträffar...</p> : null}
-                          {eventRulesByEventId[event.id]?.error ? (
-                            <p className="error-text">{eventRulesByEventId[event.id]?.error}</p>
-                          ) : null}
-                          {!eventRulesByEventId[event.id]?.loading &&
-                          !eventRulesByEventId[event.id]?.error &&
-                          (eventRulesByEventId[event.id]?.hits?.length ?? 0) === 0 ? (
-                            <p className="hint">Inga regelträffar för detta event.</p>
-                          ) : null}
+                      <p className="meta">
+                        <strong>Adress:</strong> {parkedCard.address ?? 'Adress saknas'}
+                        {mapsHref ? (
+                          <>
+                            {' '}
+                            <a href={mapsHref} target="_blank" rel="noreferrer">
+                              Visa på karta
+                            </a>
+                          </>
+                        ) : null}
+                      </p>
 
-                          {(eventRulesByEventId[event.id]?.hits ?? []).map((hit) => (
-                            <div className="event-rule-row" key={hit.id}>
-                              <span className={ruleSeverityClass(hit.severity)}>{hit.severity}</span>
-                              <span className="event-meta mono">{hit.provider_key}</span>
-                              <span className="event-meta mono">{hit.rule_type}</span>
-                              <span>{hit.summary}</span>
-                            </div>
-                          ))}
+                      {parkedCard.statusSummary.nextActionAt ? (
+                        <p className="hint">Föreslagen ny kontroll: {formatTs(parkedCard.statusSummary.nextActionAt)}</p>
+                      ) : null}
 
-                          <div className="event-rules-actions">
-                            <button onClick={() => void fetchEventRules(event.id, true)}>Uppdatera regelträffar</button>
+                      <button
+                        onClick={() =>
+                          patchVehicleState(vehicle.id, {
+                            showParkedDetails: !state.showParkedDetails,
+                          })
+                        }
+                      >
+                        {state.showParkedDetails ? 'Dölj detaljer' : 'Visa detaljer'}
+                      </button>
+
+                      {state.showParkedDetails ? (
+                        <div className="status-details">
+                          <div className="rules-summary-box">
+                            <p className="meta"><strong>Regler</strong></p>
+                            <p className="meta">
+                              <strong>Gatusopning:</strong>{' '}
+                              {parkedCard.statusSummary.servicedayText
+                                ? `${parkedCard.statusSummary.servicedayText} (parkeringsförbud)`
+                                : 'Ingen servicedag hittades.'}
+                            </p>
+                            <p className="meta">
+                              <strong>Tillåten parkering:</strong>{' '}
+                              {parkedCard.statusSummary.allowedText ?? 'Ingen tillåten tidsrad hittades.'}
+                            </p>
+                            <p className="meta">
+                              <strong>Avgift:</strong>{' '}
+                              {parkedCard.statusSummary.feeText ?? 'Taxa saknas i underlaget.'}
+                            </p>
+                            {parkedCard.statusSummary.boendeText ? (
+                              <p className="meta"><strong>Boende:</strong> {parkedCard.statusSummary.boendeText}</p>
+                            ) : null}
                           </div>
+
+                          <div className="rules-summary-box">
+                            <p className="meta">
+                              <strong>Veckoschema</strong>
+                            </p>
+                            <WeekSchedule schedule={parkedCard.weeklySchedule} />
+                          </div>
+
+                          <details>
+                            <summary>Rådata (debug)</summary>
+                            <pre>{JSON.stringify(parkedCard.debugRuleHits, null, 2)}</pre>
+                          </details>
+
+                          <button onClick={() => void fetchVehicleCard(vehicle.id, false)}>Uppdatera regelträffar</button>
                         </div>
                       ) : null}
                     </div>
-                  ))}
+                  ) : null}
+
+                  {!state.cardLoading && !state.cardError && !parkedCard ? (
+                    <p className="hint">Ingen aktiv PARKED-händelse ännu.</p>
+                  ) : null}
                 </section>
+
+                <details className="advanced-box">
+                  <summary>Avancerat</summary>
+
+                  <div className="button-row">
+                    <button onClick={() => void wakeVehicle(vehicle.id)} disabled={state.wakeLoading || state.positionLoading}>
+                      {state.wakeLoading ? 'Väcker...' : 'Wake'}
+                    </button>
+                    <button
+                      onClick={() => void fetchPosition(vehicle.id)}
+                      disabled={state.positionLoading || state.telemetryLoading}
+                    >
+                      {state.positionLoading || state.telemetryLoading ? 'Hämtar...' : 'Hämta position'}
+                    </button>
+                    <button onClick={() => void fetchTelemetry(vehicle.id)} disabled={state.telemetryLoading}>
+                      {state.telemetryLoading ? 'Laddar...' : 'Hämta telemetry'}
+                    </button>
+                  </div>
+
+                  {state.wakeError ? <p className="error-text">{formatUserError(state.wakeError)}</p> : null}
+                  {state.wakeMessage ? <p className="hint">{state.wakeMessage}</p> : null}
+
+                  {state.telemetryError ? <p className="error-text">{formatUserError(state.telemetryError)}</p> : null}
+                  {state.telemetryData ? <pre>{JSON.stringify(state.telemetryData, null, 2)}</pre> : null}
+
+                  {(cardData?.latestEvents ?? []).length > 0 ? (
+                    <div className="result-panel">
+                      <h3>Senaste events</h3>
+                      {(cardData?.latestEvents ?? []).slice(0, 5).map((event) => (
+                        <p className="meta mono" key={event.id}>
+                          {event.type} {formatTs(event.ts)} lat={event.lat ?? '-'} lng={event.lng ?? '-'}
+                        </p>
+                      ))}
+                    </div>
+                  ) : null}
+                </details>
               </article>
             );
           })}
