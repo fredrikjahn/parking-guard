@@ -14,7 +14,12 @@ const envSchema = z.object({
   TESLA_API_BASE_URL: z.string().url().default('https://fleet-api.prd.na.vn.cloud.tesla.com'),
   TESLA_SCOPES: z.string().default('openid offline_access vehicle_device_data vehicle_location vehicle_cmds'),
 
-  STOCKHOLM_BASE_URL: z.string().url().default('https://api-extern-webbtjanster.stockholm.se/ltf-tolken/v1'),
+  STOCKHOLM_LTF_BASE: z.string().url().default('https://openparking.stockholm.se/LTF-Tolken/v1'),
+  STOCKHOLM_LTF_API_KEY: z.string().optional(),
+  STOCKHOLM_BASE_URL: z
+    .string()
+    .url()
+    .default(process.env.STOCKHOLM_LTF_BASE ?? 'https://api-extern-webbtjanster.stockholm.se/ltf-tolken/v1'),
   STOCKHOLM_API_KEY: z.string().optional(),
 
   CRON_SECRET: z.string().min(1),

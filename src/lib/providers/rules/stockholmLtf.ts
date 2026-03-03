@@ -14,8 +14,8 @@ type StockholmConfig = {
 function toStockholmConfig(input: Record<string, unknown>): Required<StockholmConfig> {
   const cfg = input as StockholmConfig;
   return {
-    baseUrl: cfg.baseUrl ?? config.STOCKHOLM_BASE_URL,
-    apiKeyEnv: cfg.apiKeyEnv ?? 'STOCKHOLM_API_KEY',
+    baseUrl: cfg.baseUrl ?? config.STOCKHOLM_LTF_BASE ?? config.STOCKHOLM_BASE_URL,
+    apiKeyEnv: cfg.apiKeyEnv ?? 'STOCKHOLM_LTF_API_KEY',
   };
 }
 
@@ -63,7 +63,10 @@ export const stockholmLtfProvider: RulesProvider = {
 
   async rulesWithin({ config: providerConfig, lat, lng, radiusM }: RulesWithinInput): Promise<StockholmRaw> {
     const cfg = toStockholmConfig(providerConfig);
-    const apiKey = process.env[cfg.apiKeyEnv];
+    const apiKey =
+      process.env[cfg.apiKeyEnv] ??
+      process.env.STOCKHOLM_LTF_API_KEY ??
+      process.env.STOCKHOLM_API_KEY;
     if (!apiKey) {
       throw new Error(`Missing API key env var: ${cfg.apiKeyEnv}`);
     }

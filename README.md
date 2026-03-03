@@ -22,6 +22,13 @@ npm install
 cp .env.example .env.local
 ```
 
+Sätt Stockholm LTF-nyckel i `.env.local`:
+
+```bash
+STOCKHOLM_LTF_API_KEY=<din-open-stockholm-nyckel>
+STOCKHOLM_LTF_BASE=https://openparking.stockholm.se/LTF-Tolken/v1
+```
+
 3. Generera krypteringsnyckel för `TOKEN_ENCRYPTION_KEY_B64` (32 bytes):
 
 ```bash
@@ -53,6 +60,7 @@ npm run dev
 - `POST /api/vehicle/wake`
 - `POST /api/vehicle/register`
 - `GET /api/rules/within?lat=59.3293&lng=18.0686&radius=50`
+- `GET /api/stockholm/ltf-test`
 - `POST /api/jobs/tick` med header `x-cron-secret: <CRON_SECRET>`
 
 ## Tesla Fleet region and registration
@@ -76,6 +84,18 @@ curl -X POST "http://localhost:3000/api/vehicle/register?base=https://fleet-api.
 
 ```bash
 curl http://localhost:3000/api/vehicle/vehicles
+```
+
+## Stockholm LTF API key
+
+- Lokalt: sätt `STOCKHOLM_LTF_API_KEY` i `.env.local`.
+- Produktion (Vercel): lägg samma variabel i Project Settings -> Environment Variables.
+- Valfritt kan du sätta `STOCKHOLM_LTF_BASE` (default är Open Stockholm URL).
+
+Testa anslutningen:
+
+```bash
+curl http://localhost:3000/api/stockholm/ltf-test
 ```
 
 ## Vehicle nicknames
