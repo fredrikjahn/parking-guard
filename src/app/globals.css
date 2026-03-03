@@ -165,6 +165,14 @@ button:disabled {
   border-top: 0;
 }
 
+.event-item {
+  border-top: 1px solid #eef0f4;
+}
+
+.event-item:first-of-type {
+  border-top: 0;
+}
+
 .event-type {
   font-size: 0.73rem;
   letter-spacing: 0.03em;
@@ -194,12 +202,60 @@ button:disabled {
   color: #50308b;
 }
 
+.event-critical {
+  border-color: #efb3b3;
+  background: #fff0f0;
+  color: #9a1f1f;
+}
+
+.event-warn {
+  border-color: #f3d08a;
+  background: #fff9ea;
+  color: #8a5a00;
+}
+
+.event-info {
+  border-color: #b7c4e3;
+  background: #eff4ff;
+  color: #334a82;
+}
+
 .event-ts {
   color: #364155;
 }
 
 .event-meta {
   color: #5e6779;
+}
+
+.event-toggle {
+  margin-left: auto;
+}
+
+.event-rules {
+  margin-top: 0.35rem;
+  margin-bottom: 0.55rem;
+  padding: 0.45rem 0.65rem;
+  border-radius: 10px;
+  border: 1px solid #e7eaf1;
+  background: #fafbfd;
+}
+
+.event-rule-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem 0.5rem;
+  align-items: center;
+  padding: 0.3rem 0;
+  border-top: 1px dashed #e7eaf1;
+}
+
+.event-rule-row:first-of-type {
+  border-top: 0;
+}
+
+.event-rules-actions {
+  margin-top: 0.35rem;
 }
 
 .hint {

@@ -39,6 +39,23 @@ type VehicleEvent = {
   created_at: string;
 };
 
+type EventRuleHit = {
+  id: string;
+  vehicle_event_id: string;
+  provider_key: string;
+  rule_type: string;
+  severity: string;
+  summary: string;
+  raw_json: Record<string, unknown>;
+  created_at: string;
+};
+
+type EventRulesState = {
+  loading?: boolean;
+  error?: string;
+  hits?: EventRuleHit[];
+};
+
 type VehicleUiState = {
   wakeLoading?: boolean;
   wakeMessage?: string;
@@ -93,6 +110,13 @@ function eventTypeClass(type: string): string {
   return 'event-type';
 }
 
+function ruleSeverityClass(severity: string): string {
+  const normalized = severity.toLowerCase();
+  if (normalized === 'critical') return 'event-type event-critical';
+  if (normalized === 'warn') return 'event-type event-warn';
+  return 'event-type event-info';
+}
+
 async function readError(res: Response): Promise<string> {
   const contentType = res.headers.get('content-type') ?? '';
   if (contentType.includes('application/json')) {
@@ -130,6 +154,8 @@ export default function DashboardPage() {
   const [eventsRefreshLoading, setEventsRefreshLoading] = useState(false);
   const [nicknameDrafts, setNicknameDrafts] = useState<Record<string, string>>({});
   const [vehicleState, setVehicleState] = useState<Record<string, VehicleUiState>>({});
+  const [eventRulesByEventId, setEventRulesByEventId] = useState<Record<string, EventRulesState>>({});
+  const [expandedEventIds, setExpandedEventIds] = useState<Record<string, boolean>>({});
 
   const patchVehicleState = useCallback((vehicleId: string, patch: Partial<VehicleUiState>) => {
     setVehicleState((prev) => ({
@@ -175,6 +201,51 @@ export default function DashboardPage() {
     },
     [patchVehicleState],
   );
+
+  const fetchEventRules = useCallback(async (eventId: string, force = false): Promise<void> => {
+    const existing = eventRulesByEventId[eventId];
+    if (!force && existing?.hits && existing.hits.length >= 0) {
+      return;
+    }
+
+    setEventRulesByEventId((prev) => ({
+      ...prev,
+      [eventId]: {
+        ...(prev[eventId] ?? {}),
+        loading: true,
+        error: undefined,
+      },
+    }));
+
+    try {
+      const res = await fetch(`/api/ui/event-rules?eventId=${encodeURIComponent(eventId)}`, {
+        cache: 'no-store',
+      });
+      if (!res.ok) {
+        throw new Error(await readError(res));
+      }
+
+      const json = (await res.json()) as unknown;
+      const hits = Array.isArray(json) ? (json as EventRuleHit[]) : [];
+      setEventRulesByEventId((prev) => ({
+        ...prev,
+        [eventId]: {
+          loading: false,
+          error: undefined,
+          hits,
+        },
+      }));
+    } catch (error) {
+      setEventRulesByEventId((prev) => ({
+        ...prev,
+        [eventId]: {
+          ...(prev[eventId] ?? {}),
+          loading: false,
+          error: error instanceof Error ? error.message : 'Kunde inte hämta regelträffar',
+        },
+      }));
+    }
+  }, [eventRulesByEventId]);
 
   const loadVehicles = useCallback(async () => {
     setVehiclesLoading(true);
@@ -483,16 +554,57 @@ export default function DashboardPage() {
                   ) : null}
 
                   {(state.events ?? []).slice(0, 6).map((event) => (
-                    <div className="event-row" key={event.id}>
-                      <span className={eventTypeClass(event.type)}>{event.type}</span>
-                      <span className="event-ts mono">{formatTs(event.ts)}</span>
-                      <span className="event-meta mono">
-                        {event.lat ?? '-'}, {event.lng ?? '-'}
-                      </span>
-                      <span className="event-meta mono">v={event.speed_kph ?? '-'}</span>
-                      <span className="event-meta mono">s={event.shift_state ?? '-'}</span>
-                      {typeof event.meta?.distance_m === 'number' ? (
-                        <span className="event-meta mono">d={event.meta.distance_m}m</span>
+                    <div className="event-item" key={event.id}>
+                      <div className="event-row">
+                        <span className={eventTypeClass(event.type)}>{event.type}</span>
+                        <span className="event-ts mono">{formatTs(event.ts)}</span>
+                        <span className="event-meta mono">
+                          {event.lat ?? '-'}, {event.lng ?? '-'}
+                        </span>
+                        <span className="event-meta mono">v={event.speed_kph ?? '-'}</span>
+                        <span className="event-meta mono">s={event.shift_state ?? '-'}</span>
+                        {typeof event.meta?.distance_m === 'number' ? (
+                          <span className="event-meta mono">d={event.meta.distance_m}m</span>
+                        ) : null}
+                        <button
+                          className="event-toggle"
+                          onClick={() => {
+                            const willExpand = !expandedEventIds[event.id];
+                            setExpandedEventIds((prev) => ({ ...prev, [event.id]: willExpand }));
+                            if (willExpand) {
+                              void fetchEventRules(event.id);
+                            }
+                          }}
+                        >
+                          {expandedEventIds[event.id] ? 'Dölj regler' : 'Visa regler'}
+                        </button>
+                      </div>
+
+                      {expandedEventIds[event.id] ? (
+                        <div className="event-rules">
+                          {eventRulesByEventId[event.id]?.loading ? <p className="hint">Hämtar regelträffar...</p> : null}
+                          {eventRulesByEventId[event.id]?.error ? (
+                            <p className="error-text">{eventRulesByEventId[event.id]?.error}</p>
+                          ) : null}
+                          {!eventRulesByEventId[event.id]?.loading &&
+                          !eventRulesByEventId[event.id]?.error &&
+                          (eventRulesByEventId[event.id]?.hits?.length ?? 0) === 0 ? (
+                            <p className="hint">Inga regelträffar för detta event.</p>
+                          ) : null}
+
+                          {(eventRulesByEventId[event.id]?.hits ?? []).map((hit) => (
+                            <div className="event-rule-row" key={hit.id}>
+                              <span className={ruleSeverityClass(hit.severity)}>{hit.severity}</span>
+                              <span className="event-meta mono">{hit.provider_key}</span>
+                              <span className="event-meta mono">{hit.rule_type}</span>
+                              <span>{hit.summary}</span>
+                            </div>
+                          ))}
+
+                          <div className="event-rules-actions">
+                            <button onClick={() => void fetchEventRules(event.id, true)}>Uppdatera regelträffar</button>
+                          </div>
+                        </div>
                       ) : null}
                     </div>
                   ))}
