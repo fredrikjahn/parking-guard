@@ -56,6 +56,12 @@ type EventRulesState = {
   hits?: EventRuleHit[];
 };
 
+type EventAddressState = {
+  loading?: boolean;
+  error?: string;
+  address?: string | null;
+};
+
 type VehicleUiState = {
   wakeLoading?: boolean;
   wakeMessage?: string;
@@ -155,6 +161,7 @@ export default function DashboardPage() {
   const [nicknameDrafts, setNicknameDrafts] = useState<Record<string, string>>({});
   const [vehicleState, setVehicleState] = useState<Record<string, VehicleUiState>>({});
   const [eventRulesByEventId, setEventRulesByEventId] = useState<Record<string, EventRulesState>>({});
+  const [eventAddressByEventId, setEventAddressByEventId] = useState<Record<string, EventAddressState>>({});
   const [expandedEventIds, setExpandedEventIds] = useState<Record<string, boolean>>({});
 
   const patchVehicleState = useCallback((vehicleId: string, patch: Partial<VehicleUiState>) => {
@@ -246,6 +253,63 @@ export default function DashboardPage() {
       }));
     }
   }, [eventRulesByEventId]);
+
+  const fetchEventAddress = useCallback(async (event: VehicleEvent, force = false): Promise<void> => {
+    const lat = typeof event.lat === 'number' ? event.lat : typeof event.lat === 'string' ? Number.parseFloat(event.lat) : null;
+    const lng = typeof event.lng === 'number' ? event.lng : typeof event.lng === 'string' ? Number.parseFloat(event.lng) : null;
+    if (!Number.isFinite(lat) || !Number.isFinite(lng)) {
+      setEventAddressByEventId((prev) => ({
+        ...prev,
+        [event.id]: {
+          loading: false,
+          error: 'Saknar koordinater för adressuppslag.',
+          address: null,
+        },
+      }));
+      return;
+    }
+
+    if (!force && eventAddressByEventId[event.id]?.address) {
+      return;
+    }
+
+    setEventAddressByEventId((prev) => ({
+      ...prev,
+      [event.id]: {
+        ...(prev[event.id] ?? {}),
+        loading: true,
+        error: undefined,
+      },
+    }));
+
+    try {
+      const res = await fetch(
+        `/api/ui/reverse-geocode?lat=${encodeURIComponent(String(lat))}&lng=${encodeURIComponent(String(lng))}`,
+        { cache: 'no-store' },
+      );
+      if (!res.ok) {
+        throw new Error(await readError(res));
+      }
+      const json = (await res.json()) as { address?: string | null };
+      setEventAddressByEventId((prev) => ({
+        ...prev,
+        [event.id]: {
+          loading: false,
+          error: undefined,
+          address: json.address ?? null,
+        },
+      }));
+    } catch (error) {
+      setEventAddressByEventId((prev) => ({
+        ...prev,
+        [event.id]: {
+          loading: false,
+          error: error instanceof Error ? error.message : 'Kunde inte hämta adress',
+          address: null,
+        },
+      }));
+    }
+  }, [eventAddressByEventId]);
 
   const loadVehicles = useCallback(async () => {
     setVehiclesLoading(true);
@@ -578,7 +642,22 @@ export default function DashboardPage() {
                         >
                           {expandedEventIds[event.id] ? 'Dölj regler' : 'Visa regler'}
                         </button>
+                        <button className="event-toggle" onClick={() => void fetchEventAddress(event)}>
+                          Visa adress
+                        </button>
                       </div>
+
+                      {eventAddressByEventId[event.id]?.loading ? (
+                        <p className="hint">Hämtar adress...</p>
+                      ) : null}
+                      {eventAddressByEventId[event.id]?.error ? (
+                        <p className="error-text">{eventAddressByEventId[event.id]?.error}</p>
+                      ) : null}
+                      {eventAddressByEventId[event.id]?.address ? (
+                        <p className="hint">
+                          <strong>Adress:</strong> {eventAddressByEventId[event.id]?.address}
+                        </p>
+                      ) : null}
 
                       {expandedEventIds[event.id] ? (
                         <div className="event-rules">
