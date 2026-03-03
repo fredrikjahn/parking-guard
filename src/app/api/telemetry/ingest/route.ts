@@ -4,6 +4,7 @@ import { notifyParkingEvent } from '@/lib/notify/notifier';
 import { evaluateRulesForPoint } from '@/lib/engine/ruleEvaluator';
 import { resolveRulesSourcesForPosition } from '@/lib/engine/jurisdictionResolver';
 import { repo, type NotificationKind, type RuleSeverity } from '@/lib/db/repo';
+import { evaluateStockholmWithin } from '@/lib/providers/rules/stockholmLtf';
 import { supabaseAdmin } from '@/lib/db/client';
 
 const bodySchema = z
@@ -72,6 +73,11 @@ type ParkedAutomationResult = {
   rulesErrors?: string[];
   note?: string;
   error?: string;
+};
+
+type VehicleEventRuleHitRow = {
+  id: string;
+  severity: string;
 };
 
 function normalizeTs(value: string | number): string {
@@ -404,6 +410,80 @@ async function findVehicle(ref: { vin?: string; externalVehicleId?: string }): P
   return null;
 }
 
+function rankSeverity(value: string): number {
+  if (value === 'CRITICAL') return 2;
+  if (value === 'WARN') return 1;
+  return 0;
+}
+
+function maxSeverity(values: string[]): RuleSeverity {
+  let current: RuleSeverity = 'INFO';
+  for (const value of values) {
+    const normalized = value === 'CRITICAL' || value === 'WARN' || value === 'INFO' ? value : 'INFO';
+    if (rankSeverity(normalized) > rankSeverity(current)) {
+      current = normalized;
+    }
+  }
+  return current;
+}
+
+async function saveVehicleEventRuleHits(input: {
+  vehicleEventId: string;
+  lat: number;
+  lng: number;
+}): Promise<{ ruleSeverity: RuleSeverity; ruleHitsSaved: number }> {
+  const { data: existingHits, error: existingError } = (await supabaseAdmin
+    .from('vehicle_event_rule_hits')
+    .select('id,severity')
+    .eq('vehicle_event_id', input.vehicleEventId)) as {
+    data: VehicleEventRuleHitRow[] | null;
+    error: { message: string } | null;
+  };
+
+  if (existingError) {
+    throw new Error(`vehicle_event_rule_hits lookup failed: ${existingError.message}`);
+  }
+
+  if ((existingHits ?? []).length > 0) {
+    return {
+      ruleSeverity: maxSeverity((existingHits ?? []).map((row) => row.severity)),
+      ruleHitsSaved: 0,
+    };
+  }
+
+  const normalized = await evaluateStockholmWithin({
+    lat: input.lat,
+    lng: input.lng,
+    radiusM: config.DEFAULT_RADIUS_M,
+  });
+
+  const rows = normalized.hits.map((hit) => ({
+    vehicle_event_id: input.vehicleEventId,
+    provider_key: 'stockholm_ltf',
+    rule_type: hit.rule_type,
+    severity: hit.severity,
+    summary: hit.summary,
+    raw_json: hit.raw ?? {},
+  }));
+
+  const { data: insertedRows, error: insertError } = (await supabaseAdmin
+    .from('vehicle_event_rule_hits')
+    .insert(rows)
+    .select('id')) as {
+    data: Array<{ id: string }> | null;
+    error: { message: string } | null;
+  };
+
+  if (insertError) {
+    throw new Error(`vehicle_event_rule_hits insert failed: ${insertError.message}`);
+  }
+
+  return {
+    ruleSeverity: normalized.overallSeverity,
+    ruleHitsSaved: insertedRows?.length ?? rows.length,
+  };
+}
+
 export async function POST(req: Request) {
   const expectedSecret = process.env.TELEMETRY_INGEST_SECRET;
   if (!expectedSecret) {
@@ -552,11 +632,28 @@ export async function POST(req: Request) {
     }
   }
 
+  const parkedLat = currLat ?? prevLat;
+  const parkedLng = currLng ?? prevLng;
+  let ruleSeverity: RuleSeverity | null = null;
+  let ruleHitsSaved = 0;
+  let ruleError: string | null = null;
+
+  if (eventEmitted?.type === 'PARKED' && parkedLat !== null && parkedLng !== null) {
+    try {
+      const result = await saveVehicleEventRuleHits({
+        vehicleEventId: eventEmitted.id,
+        lat: parkedLat,
+        lng: parkedLng,
+      });
+      ruleSeverity = result.ruleSeverity;
+      ruleHitsSaved = result.ruleHitsSaved;
+    } catch (error) {
+      ruleError = error instanceof Error ? error.message : 'Failed to save event rule hits';
+    }
+  }
+
   let automation: ParkedAutomationResult | null = null;
   if (eventEmitted?.type === 'PARKED') {
-    const parkedLat = currLat ?? prevLat;
-    const parkedLng = currLng ?? prevLng;
-
     if (parkedLat === null || parkedLng === null) {
       automation = {
         triggered: false,
@@ -599,6 +696,9 @@ export async function POST(req: Request) {
     ok: true,
     eventEmitted,
     automation,
+    ruleSeverity,
+    ruleHitsSaved,
+    ...(ruleError ? { ruleError } : {}),
     distanceM: distanceM === null ? null : Math.round(distanceM * 10) / 10,
     prevMoving,
     currMoving,
